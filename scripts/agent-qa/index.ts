@@ -43,6 +43,9 @@ type ParsedPr = {
   title?: string;
   body?: string | null;
   draft?: boolean;
+  base?: {
+    ref?: string;
+  };
   labels?: Array<{ name?: string }>;
 };
 
@@ -98,9 +101,8 @@ const pr = parseJson<ParsedPr>(process.env.PR_JSON, {});
 const context = {
   buildId: process.env.BUILD_ID || '',
   buildPath: APK_PATH || '',
-  baseRef: process.env.BASE_REF || '',
-  headSha: process.env.HEAD_SHA || '',
-  prNumber: Number(process.env.PR_NUMBER || pr.number || 0),
+  baseRef: pr.base?.ref || '',
+  prNumber: Number(pr.number || 0),
   workflowUrl: process.env.WORKFLOW_URL || '',
   androidApplicationId: process.env.ANDROID_APPLICATION_ID || '',
   emulatorDevice: process.env.AGENT_DEVICE_ANDROID_DEVICE || '',
@@ -222,7 +224,7 @@ async function getChangedFiles(): Promise<ChangedFiles> {
 
   await ensureBaseRefFetched();
   const comparisonTarget = context.baseRef
-    ? `origin/${context.baseRef}...${context.headSha || 'HEAD'}`
+    ? `origin/${context.baseRef}...HEAD`
     : 'HEAD~1...HEAD';
 
   const [names, statSummary] = await Promise.all([

@@ -61,9 +61,6 @@ jobs:
     env:
       BUILD_ID: ${{ after.android_repack.outputs.build_id || after.android_build.outputs.build_id }}
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      BASE_REF: ${{ github.event.pull_request.base.ref }}
-      HEAD_SHA: ${{ github.sha }}
       WORKFLOW_URL: ${{ workflow.url }}
       ANDROID_APPLICATION_ID: dev.expo.easagentdevice
       AGENT_DEVICE_SESSION: qa-android
