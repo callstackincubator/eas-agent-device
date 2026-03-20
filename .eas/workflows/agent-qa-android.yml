@@ -79,6 +79,11 @@ jobs:
         with:
           build_id: ${{ env.BUILD_ID }}
           extensions: [apk]
+      - id: debug_agent_device
+        run: |
+          node -v
+          npx agent-device --version
+          npx agent-device devices --platform android || true
       - id: run_agent_qa
         run: |
           set +e
