@@ -1,50 +1,52 @@
-# Welcome to your Expo app 👋
+# EAS agent-device demo
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+This repo is a minimal Expo + CNG example for running AI-assisted Android QA on EAS Workflows.
 
-## Get started
+## What it does
 
-1. Install dependencies
+- Reuses compatible Android builds with `fingerprint` + `get-build` + `repack`
+- Falls back to a fresh `build` when the fingerprint changes
+- Runs a small Node.js QA agent built with the AI SDK `ToolLoopAgent`
+- Uses `agent-device` to drive the Android app, take screenshots, and summarize findings
+- Posts the QA summary back to the GitHub pull request with `github-comment`
 
-   ```bash
-   npm install
-   ```
+`qa-release` is the fast review artifact for PR automation. It is not the production shipping artifact.
 
-2. Start the app
+## Files
 
-   ```bash
-   npx expo start
-   ```
+- [eas.json](./eas.json)
+- [.eas/workflows/agent-qa-android.yml](./.eas/workflows/agent-qa-android.yml)
+- [scripts/agent-qa/index.ts](./scripts/agent-qa/index.ts)
 
-In the output, you'll find options to open the app in a
+## Required setup
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+1. Link the project to EAS.
+2. Keep using CNG. Do not commit `android/` or `ios/`.
+3. Configure an EAS environment named `preview`.
+4. Add `AI_GATEWAY_API_KEY` to that environment.
+5. Treat the `qa-release` profile as CI review output only. Keep store or production release flows separate.
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+Optional environment variables for the QA job:
 
-## Get a fresh project
+- `AGENT_DEVICE_ANDROID_DEVICE`: Android AVD name to boot in CI
+- `AGENT_DEVICE_ANDROID_SERIAL`: Specific emulator/device serial to target
+- `QA_MODEL`: Override the default model (`openai/gpt-5.1-mini`)
 
-When you're ready, run:
+## Local smoke test
 
 ```bash
-npm run reset-project
+npm install
+npx tsc --noEmit
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+The workflow runner writes its outputs to `artifacts/qa/` during execution. Those files are intentionally not committed.
 
-## Learn more
+To execute the runner directly with Node 24, provide the same environment variables the workflow sets:
 
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+```bash
+AI_GATEWAY_API_KEY=... \
+APK_PATH=/absolute/path/to/app.apk \
+BUILD_ID=test-build \
+PR_JSON='{"number":1,"title":"Test PR","body":"Smoke test"}' \
+node ./scripts/agent-qa/index.ts
+```
