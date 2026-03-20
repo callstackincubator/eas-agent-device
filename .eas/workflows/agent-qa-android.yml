@@ -90,8 +90,18 @@ jobs:
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
           which sdkmanager
           which avdmanager
-          yes | sdkmanager --licenses || true
+
+          set +e
+          yes | sdkmanager --licenses
+          SDKMANAGER_LICENSES_EXIT="${PIPESTATUS[1]}"
+
           yes | sdkmanager --install "platform-tools" "emulator" "${SYSTEM_IMAGE}"
+          SDKMANAGER_INSTALL_EXIT="${PIPESTATUS[1]}"
+          set -e
+
+          test "${SDKMANAGER_LICENSES_EXIT}" -eq 0
+          test "${SDKMANAGER_INSTALL_EXIT}" -eq 0
+
           which emulator
 
           if ! emulator -list-avds | grep -qx "${AVD_NAME}"; then
