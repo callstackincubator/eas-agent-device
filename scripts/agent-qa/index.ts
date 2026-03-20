@@ -35,7 +35,6 @@ type Report = ReportInput & {
   generatedAt: string;
   model: string;
   prNumber: number;
-  repository: string;
   screenshots: ScreenshotInfo[];
 };
 
@@ -102,8 +101,6 @@ const context = {
   baseRef: process.env.BASE_REF || '',
   headSha: process.env.HEAD_SHA || '',
   prNumber: Number(process.env.PR_NUMBER || pr.number || 0),
-  repository: process.env.REPOSITORY || '',
-  repositoryOwner: process.env.REPOSITORY_OWNER || '',
   workflowUrl: process.env.WORKFLOW_URL || '',
   androidApplicationId: process.env.ANDROID_APPLICATION_ID || '',
   emulatorDevice: process.env.AGENT_DEVICE_ANDROID_DEVICE || '',
@@ -377,7 +374,6 @@ async function persistReport(reportInput: ReportInput) {
     buildId: context.buildId,
     workflowUrl: context.workflowUrl,
     prNumber: context.prNumber,
-    repository: context.repository,
     screenshots,
     ...reportInput,
   };
@@ -504,7 +500,6 @@ async function main(): Promise<void> {
           additionalProperties: false,
         }),
         execute: async () => ({
-          repository: context.repository,
           prNumber: context.prNumber,
           title: pr.title || '',
           body: pr.body || '',
