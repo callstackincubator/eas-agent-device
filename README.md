@@ -30,7 +30,7 @@ Optional environment variables for the QA job:
 
 - `AGENT_DEVICE_ANDROID_DEVICE`: Android AVD name to boot in CI
 - `AGENT_DEVICE_ANDROID_SERIAL`: Specific emulator/device serial to target
-- `QA_MODEL`: Override the default model (`openai/gpt-5.1-mini`)
+- `QA_MODEL`: Override the default model (`openai/gpt-5-mini`)
 
 ## Local smoke test
 

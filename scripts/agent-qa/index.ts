@@ -87,7 +87,7 @@ const COMMENT_PATH = path.join(ARTIFACTS_DIR, 'comment.md');
 const REPORT_PATH = path.join(ARTIFACTS_DIR, 'report.json');
 const AGENT_DEVICE_BIN = resolveAgentDeviceBinary();
 const APK_PATH = process.env.APK_PATH;
-const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5.1-mini';
+const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5-mini';
 const AGENT_DEVICE_SKILL_PATH = path.join(
   ROOT_DIR,
   'node_modules',
