@@ -64,8 +64,8 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BASE_REF: ${{ github.event.pull_request.base.ref }}
       HEAD_SHA: ${{ github.sha }}
-      GITHUB_REPOSITORY: ${{ github.repository }}
-      GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+      REPOSITORY: ${{ github.repository }}
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
       WORKFLOW_URL: ${{ workflow.url }}
       ANDROID_APPLICATION_ID: dev.expo.easagentdevice
       AGENT_DEVICE_SESSION: qa-android
