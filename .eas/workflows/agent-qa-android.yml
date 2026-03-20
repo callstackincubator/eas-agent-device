@@ -54,6 +54,7 @@ jobs:
     name: Agent-device QA
     after: [android_repack, android_build]
     if: ${{ after.android_repack.status == 'success' || after.android_build.status == 'success' }}
+    environment: preview
     runs_on: linux-medium-nested-virtualization
     outputs:
       comment_body: ${{ steps.run_agent_qa.outputs.comment_body }}
