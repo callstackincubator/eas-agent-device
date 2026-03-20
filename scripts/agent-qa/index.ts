@@ -61,19 +61,6 @@ type CommandOptions = {
   allowFailure?: boolean;
 };
 
-type BootResult =
-  | {
-      attempted: false;
-      reason: string;
-    }
-  | {
-      attempted: true;
-      command: string;
-      ok: boolean;
-      stdout: string;
-      stderr: string;
-    };
-
 type ExecFileError = Error & {
   stdout?: string;
   stderr?: string;
@@ -292,38 +279,6 @@ async function readFileExcerpt(
   };
 }
 
-async function maybeBootAndroidEmulator(): Promise<BootResult> {
-  if (!context.emulatorDevice) {
-    return {
-      attempted: false,
-      reason: 'AGENT_DEVICE_ANDROID_DEVICE was not set.',
-    };
-  }
-
-  const args = [
-    'boot',
-    '--platform',
-    'android',
-    '--device',
-    context.emulatorDevice,
-    '--headless',
-  ];
-  if (context.androidSerial) {
-    args.push('--serial', context.androidSerial);
-  }
-
-  const result = await runCommand(AGENT_DEVICE_BIN, args, {
-    allowFailure: true,
-  });
-  return {
-    attempted: true,
-    command: [AGENT_DEVICE_BIN, ...args].join(' '),
-    ok: result.ok,
-    stdout: trim(result.stdout, 3000),
-    stderr: trim(result.stderr, 3000),
-  };
-}
-
 async function listScreenshots(): Promise<ScreenshotInfo[]> {
   if (!existsSync(ARTIFACTS_DIR)) {
     return [];
@@ -470,11 +425,6 @@ function buildPrompt(): string {
 async function main(): Promise<void> {
   await ensureArtifactsDir();
   ensureRequiredAgentQaEnvs();
-
-  const emulatorBoot = await maybeBootAndroidEmulator();
-  if (emulatorBoot.attempted) {
-    console.log('Android emulator boot attempt:', emulatorBoot);
-  }
 
   const agent = new ToolLoopAgent({
     model: gateway(MODEL_ID),
