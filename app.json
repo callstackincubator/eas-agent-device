@@ -48,9 +48,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "5cf1da2d-4b3d-4831-9640-28cd0ce8551f"
+        "projectId": "12e692cd-9d14-4116-84ab-4c08692d2682"
       }
     },
-    "owner": "michalpierzchala"
+    "owner": "callstack.io"
   }
 }
