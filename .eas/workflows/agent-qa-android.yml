@@ -64,6 +64,7 @@ jobs:
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
       WORKFLOW_URL: ${{ workflow.url }}
       ANDROID_APPLICATION_ID: dev.expo.easagentdevice
+      AGENT_DEVICE_ANDROID_DEVICE: ci-android
       AGENT_DEVICE_SESSION: qa-android
       AGENT_DEVICE_PLATFORM: android
       QA_MODEL: openai/gpt-5-mini
@@ -75,9 +76,33 @@ jobs:
         with:
           build_id: ${{ env.BUILD_ID }}
           extensions: [apk]
+      - id: provision_android_emulator
+        run: |
+          set -euxo pipefail
+
+          SYSTEM_IMAGE="system-images;android-35;google_apis;x86_64"
+          AVD_NAME="${AGENT_DEVICE_ANDROID_DEVICE}"
+
+          which sdkmanager
+          which avdmanager
+          which emulator
+
+          yes | sdkmanager --install "${SYSTEM_IMAGE}"
+
+          if ! emulator -list-avds | grep -qx "${AVD_NAME}"; then
+            echo "no" | avdmanager create avd \
+              --force \
+              --name "${AVD_NAME}" \
+              --package "${SYSTEM_IMAGE}" \
+              --device "pixel_6"
+          fi
+
+          npx agent-device boot --platform android --device "${AVD_NAME}" --headless
       - id: debug_agent_device
         run: |
+          set -euxo pipefail
           node -v
+          emulator -list-avds || true
           npx agent-device --version
           npx agent-device devices --platform android || true
       - id: run_agent_qa
