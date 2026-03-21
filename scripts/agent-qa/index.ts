@@ -5,13 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 
-import { ToolLoopAgent, gateway, jsonSchema, stepCountIs, tool } from 'ai';
-
-type ChangedFiles = {
-  comparisonTarget: string;
-  files: string[];
-  statSummary: string;
-};
+import { ToolLoopAgent, gateway, jsonSchema } from 'ai';
 
 type SkillMetadata = {
   name: string;
@@ -50,9 +44,6 @@ type ParsedPr = {
   title?: string;
   body?: string | null;
   draft?: boolean;
-  base?: {
-    ref?: string;
-  };
   labels?: Array<{ name?: string }>;
 };
 
@@ -82,6 +73,11 @@ const REPORT_PATH = path.join(ARTIFACTS_DIR, 'report.json');
 const AGENT_DEVICE_BIN = resolveAgentDeviceBinary();
 const APK_PATH = process.env.APK_PATH;
 const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5-mini';
+const EMPTY_INPUT_SCHEMA = jsonSchema({
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+});
 const SKILL_DIRECTORIES = [
   path.join(ROOT_DIR, 'node_modules', 'agent-device', 'skills'),
 ];
@@ -90,15 +86,12 @@ const pr = parseJson<ParsedPr>(process.env.PR_JSON, {});
 const context = {
   buildId: process.env.BUILD_ID || '',
   buildPath: APK_PATH || '',
-  baseRef: pr.base?.ref || '',
   prNumber: Number(pr.number || 0),
   workflowUrl: process.env.WORKFLOW_URL || '',
   androidApplicationId: process.env.ANDROID_APPLICATION_ID || '',
   emulatorDevice: process.env.AGENT_DEVICE_ANDROID_DEVICE || '',
   androidSerial: process.env.AGENT_DEVICE_ANDROID_SERIAL || '',
 };
-
-let cachedChangedFiles: ChangedFiles | undefined;
 
 function resolveAgentDeviceBinary(): string {
   const local = path.join(ROOT_DIR, 'node_modules', '.bin', 'agent-device');
@@ -307,100 +300,6 @@ async function ensureArtifactsDir(): Promise<void> {
   await mkdir(ARTIFACTS_DIR, { recursive: true });
 }
 
-async function ensureBaseRefFetched(): Promise<void> {
-  if (!context.baseRef) {
-    return;
-  }
-
-  await runCommand(
-    'git',
-    [
-      'fetch',
-      'origin',
-      `refs/heads/${context.baseRef}:refs/remotes/origin/${context.baseRef}`,
-      '--depth=50',
-    ],
-    {
-      allowFailure: true,
-    },
-  );
-}
-
-async function getChangedFiles(): Promise<ChangedFiles> {
-  if (cachedChangedFiles) {
-    return cachedChangedFiles;
-  }
-
-  await ensureBaseRefFetched();
-  const comparisonTarget = context.baseRef
-    ? `origin/${context.baseRef}...HEAD`
-    : 'HEAD~1...HEAD';
-
-  const [names, statSummary] = await Promise.all([
-    runCommand('git', ['diff', '--name-only', comparisonTarget]),
-    runCommand('git', ['diff', '--stat', comparisonTarget]),
-  ]);
-
-  cachedChangedFiles = {
-    comparisonTarget,
-    files: names.stdout
-      .split('\n')
-      .map((file) => file.trim())
-      .filter(Boolean),
-    statSummary: trim(statSummary.stdout || statSummary.stderr, 4000),
-  };
-
-  return cachedChangedFiles;
-}
-
-function assertWithinRoot(absolutePath: string): string {
-  const relativePath = path.relative(ROOT_DIR, absolutePath);
-  const normalizedRelativePath = relativePath.split(path.sep).join('/');
-
-  if (
-    normalizedRelativePath === '' ||
-    normalizedRelativePath.startsWith('../') ||
-    normalizedRelativePath === '..'
-  ) {
-    throw new Error(
-      `Refusing to read a path outside the repository root: ${absolutePath}`,
-    );
-  }
-
-  return normalizedRelativePath;
-}
-
-async function readFileExcerpt(
-  filePath: string,
-  startLine = 1,
-  maxLines = 200,
-) {
-  const absolutePath = path.resolve(ROOT_DIR, filePath);
-  const relativePath = assertWithinRoot(absolutePath);
-  const changedFiles = await getChangedFiles();
-
-  if (!changedFiles.files.includes(relativePath)) {
-    throw new Error(
-      `Refusing to read ${relativePath}. The read_file_excerpt tool is limited to files changed in this pull request.`,
-    );
-  }
-
-  const content = await readFile(absolutePath, 'utf8');
-  const lines = content.split('\n');
-  const slice = lines.slice(
-    Math.max(startLine - 1, 0),
-    Math.max(startLine - 1, 0) + maxLines,
-  );
-
-  return {
-    absolutePath,
-    relativePath,
-    startLine,
-    endLine: startLine + slice.length - 1,
-    content: slice.join('\n'),
-  };
-}
-
 async function listScreenshots(): Promise<ScreenshotInfo[]> {
   if (!existsSync(ARTIFACTS_DIR)) {
     return [];
@@ -552,29 +451,25 @@ async function main(): Promise<void> {
 
   const agent = new ToolLoopAgent({
     model: gateway(MODEL_ID),
-    stopWhen: stepCountIs(20),
     instructions: [
       'You are an Android QA agent running inside EAS Workflows.',
-      'First inspect the PR context and changed files.',
-      'Infer a short list of acceptance criteria focused on user-visible behavior.',
+      'Treat the app and repository as a black box.',
+      'Infer a short list of acceptance criteria from PR metadata, focusing on user-visible behavior.',
       'Use agent-device to test the Android APK at the provided build path.',
       'Use the local skills list in the prompt. Load a relevant skill before making non-trivial command choices.',
       'For installation, prefer: reinstall QAApp <build_path> --platform android, then open <application_id> --platform android --session qa-android --relaunch.',
       'Take screenshots for meaningful states and save them in artifacts/qa with .png filenames.',
       'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
+      'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are QA artifacts such as screenshots and reports.',
       'Do not claim success without evidence from tool results.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
       'You must call write_report exactly once before you finish.',
     ].join(' '),
     tools: {
-      get_pr_context: tool({
+      get_pr_context: {
         description:
           'Read the GitHub pull request context and workflow metadata for this QA run.',
-        inputSchema: jsonSchema({
-          type: 'object',
-          properties: {},
-          additionalProperties: false,
-        }),
+        inputSchema: EMPTY_INPUT_SCHEMA,
         execute: async () => ({
           prNumber: context.prNumber,
           title: pr.title || '',
@@ -590,53 +485,8 @@ async function main(): Promise<void> {
           emulatorDevice: context.emulatorDevice,
           androidSerial: context.androidSerial,
         }),
-      }),
-      get_changed_files: tool({
-        description:
-          'List changed files for the PR and a compact git diff stat summary.',
-        inputSchema: jsonSchema({
-          type: 'object',
-          properties: {},
-          additionalProperties: false,
-        }),
-        execute: async () => getChangedFiles(),
-      }),
-      read_file_excerpt: tool({
-        description:
-          'Read a file from the repository with line numbers for changed-file inspection.',
-        inputSchema: jsonSchema({
-          type: 'object',
-          properties: {
-            path: {
-              type: 'string',
-              description: 'Repository-relative file path to read.',
-            },
-            startLine: {
-              type: 'integer',
-              minimum: 1,
-              description: '1-based line number to start reading from.',
-            },
-            maxLines: {
-              type: 'integer',
-              minimum: 1,
-              maximum: 400,
-              description: 'Maximum number of lines to read.',
-            },
-          },
-          required: ['path'],
-          additionalProperties: false,
-        }),
-        execute: async ({
-          path: filePath,
-          startLine = 1,
-          maxLines = 200,
-        }: {
-          path: string;
-          startLine?: number;
-          maxLines?: number;
-        }) => readFileExcerpt(filePath, startLine, maxLines),
-      }),
-      load_skill: tool({
+      },
+      load_skill: {
         description:
           'Load a local skill and return its instructions plus the skill directory path.',
         inputSchema: jsonSchema({
@@ -661,8 +511,8 @@ async function main(): Promise<void> {
             content: stripFrontmatter(content),
           };
         },
-      }),
-      read_skill_file: tool({
+      },
+      read_skill_file: {
         description:
           'Read a text file inside a loaded skill directory, such as references or scripts.',
         inputSchema: jsonSchema({
@@ -720,8 +570,8 @@ async function main(): Promise<void> {
             content: slice.join('\n'),
           };
         },
-      }),
-      agent_device: tool({
+      },
+      agent_device: {
         description:
           'Run an agent-device command for Android UI automation and screenshot capture.',
         inputSchema: jsonSchema({
@@ -762,8 +612,8 @@ async function main(): Promise<void> {
             json: parseJson(result.stdout, null as unknown),
           };
         },
-      }),
-      write_report: tool({
+      },
+      write_report: {
         description:
           'Persist the final QA summary, findings, and screenshot index to artifacts/qa.',
         inputSchema: jsonSchema({
@@ -793,7 +643,7 @@ async function main(): Promise<void> {
           additionalProperties: false,
         }),
         execute: async (input: ReportInput) => persistReport(input),
-      }),
+      },
     },
   });
 
