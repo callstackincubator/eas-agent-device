@@ -640,14 +640,14 @@ async function main(): Promise<void> {
   if (!existsSync(COMMENT_PATH)) {
     await persistReport({
       overallStatus: 'blocked',
-      summary: 'The agent completed without calling write_report.',
+      summary: result.text || 'The agent completed without calling write_report.',
       checked: ['Produce a QA report'],
       issues: ['The write_report tool was not called by the agent.'],
       nextSteps: [
         'Inspect the workflow logs and tighten the agent instructions.',
       ],
     });
-    throw new Error('The QA agent did not write a report.');
+    return;
   }
 }
 
