@@ -94,6 +94,7 @@ const STATUS_PATH = path.join(ARTIFACTS_DIR, 'status.txt');
 const AGENT_DEVICE_BIN = resolveAgentDeviceBinary();
 const QA_PLATFORM = normalizePlatform(process.env.QA_PLATFORM);
 const APP_PATH = process.env.APP_PATH;
+const BOOTSTRAP_ERROR = process.env.AGENT_QA_BOOTSTRAP_ERROR;
 const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
 const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5.4-mini';
 const EMPTY_INPUT_SCHEMA = jsonSchema({
@@ -337,6 +338,34 @@ async function runCommand(
   }
 }
 
+async function runAgentDeviceCommand(command: string, args: string[] = []): Promise<{
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  json: unknown;
+}> {
+  const result = await runCommand(AGENT_DEVICE_BIN, [command, ...args], {
+    allowFailure: true,
+  });
+
+  agentDeviceTrace.push({
+    command: [command, ...args].join(' '),
+    ok: result.ok,
+    exitCode: result.exitCode,
+    stdout: trim(result.stdout, 4000),
+    stderr: trim(result.stderr, 2000),
+  });
+
+  return {
+    ok: result.ok,
+    exitCode: result.exitCode,
+    stdout: trim(result.stdout, 8000),
+    stderr: trim(result.stderr, 4000),
+    json: parseJson(result.stdout, null as unknown),
+  };
+}
+
 async function ensureArtifactsDir(): Promise<void> {
   await mkdir(ARTIFACTS_DIR, { recursive: true });
 }
@@ -575,8 +604,8 @@ function buildPrompt(skills: SkillMetadata[]): string {
       : [`- Preferred Android device: ${context.deviceName || 'n/a'}`];
   const platformSpecificFlow =
     context.platform === 'ios'
-      ? `For iOS simulator runs, the workflow already binds the session to ${context.deviceName}. Prefer reinstall ${context.applicationId} ${context.buildPath}, then open ${context.applicationId} --relaunch. Do not pass --device, --udid, or --session in normal app commands.`
-      : `For Android runs, the workflow already binds the session to ${context.deviceName || 'the booted emulator'}. Try reinstall ${context.applicationId} ${context.buildPath} first. If reinstall fails during uninstall, retry with install ${context.applicationId} ${context.buildPath}. Then open ${context.applicationId} --relaunch.`;
+      ? `For iOS simulator runs, the workflow already booted the app on ${context.deviceName}. Do not pass --device, --udid, or --session in normal app commands.`
+      : `For Android runs, the workflow already booted the app on ${context.deviceName || 'the booted emulator'}.`;
 
   return [
     `Review this pull request and run a lightweight ${context.platformLabel} QA pass.`,
@@ -623,6 +652,10 @@ async function main(): Promise<void> {
   await ensureArtifactsDir();
   await ensureScreenshotsDir();
   ensureRequiredAgentQaEnvs();
+  if (BOOTSTRAP_ERROR) {
+    await writeBlockedReport(new Error(BOOTSTRAP_ERROR));
+    return;
+  }
   const skills = await discoverSkills(SKILL_DIRECTORIES);
 
   const agent = new ToolLoopAgent({
@@ -631,11 +664,11 @@ async function main(): Promise<void> {
       `You are a ${context.platformLabel} QA agent running inside EAS Workflows.`,
       'Treat the app and repository as a black box.',
       'Infer a short list of acceptance criteria from PR metadata, focusing on user-visible behavior.',
-      `Use agent-device to test the ${context.platform === 'ios' ? 'iOS simulator app bundle' : 'Android build artifact'} at the provided build path.`,
+      'The workflow has already installed and launched the app before the agent starts.',
       'Use the local skills list in the prompt. Load a relevant skill before making non-trivial command choices.',
       context.platform === 'ios'
-        ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Reinstall the app bundle first, then open ${context.applicationId} --relaunch. Do not pass --device, --udid, --serial, or --session in normal app commands.`
-        : `For Android runs, install or reinstall the APK first, then open the installed package name ${context.applicationId}. If reinstall fails during uninstall, retry with install before giving up.`,
+        ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Do not pass --device, --udid, --serial, or --session in normal app commands.`
+        : 'For Android runs, the workflow already booted and bound the emulator.',
       `Take screenshots for meaningful states and save them temporarily in ${SCREENSHOTS_DIR} with .png filenames.`,
       'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
       'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
@@ -795,27 +828,7 @@ async function main(): Promise<void> {
         }: {
           command: string;
           args?: string[];
-        }) => {
-          const result = await runCommand(
-            AGENT_DEVICE_BIN,
-            [command, ...args],
-            { allowFailure: true },
-          );
-          agentDeviceTrace.push({
-            command: [command, ...args].join(' '),
-            ok: result.ok,
-            exitCode: result.exitCode,
-            stdout: trim(result.stdout, 4000),
-            stderr: trim(result.stderr, 2000),
-          });
-          return {
-            ok: result.ok,
-            exitCode: result.exitCode,
-            stdout: trim(result.stdout, 8000),
-            stderr: trim(result.stderr, 4000),
-            json: parseJson(result.stdout, null as unknown),
-          };
-        },
+        }) => runAgentDeviceCommand(command, args),
       },
       write_report: {
         description:

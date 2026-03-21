@@ -4,6 +4,7 @@ set -uo pipefail
 
 APP_PATH_ARG="${1:?APP_PATH argument is required}"
 QA_PLATFORM_VALUE="${QA_PLATFORM:?QA_PLATFORM is required}"
+APPLICATION_ID_VALUE="${APPLICATION_ID:?APPLICATION_ID is required}"
 
 case "${QA_PLATFORM_VALUE}" in
   ios)
@@ -19,6 +20,29 @@ esac
 
 set +e
 export APP_PATH="${APP_PATH_ARG}"
+
+BOOTSTRAP_ERROR=""
+BOOTSTRAP_STEP="reinstall"
+npx agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
+BOOTSTRAP_EXIT=$?
+
+if [ "${BOOTSTRAP_EXIT}" -ne 0 ] && [ "${QA_PLATFORM_VALUE}" = "android" ]; then
+  BOOTSTRAP_STEP="install"
+  npx agent-device install "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
+  BOOTSTRAP_EXIT=$?
+fi
+
+if [ "${BOOTSTRAP_EXIT}" -eq 0 ]; then
+  BOOTSTRAP_STEP="open"
+  npx agent-device open "${APPLICATION_ID_VALUE}" --platform "${QA_PLATFORM_VALUE}" --relaunch
+  BOOTSTRAP_EXIT=$?
+fi
+
+if [ "${BOOTSTRAP_EXIT}" -ne 0 ]; then
+  BOOTSTRAP_ERROR="Deterministic ${PLATFORM_LABEL} app bootstrap failed during ${BOOTSTRAP_STEP}. See workflow logs above."
+fi
+
+export AGENT_QA_BOOTSTRAP_ERROR="${BOOTSTRAP_ERROR}"
 npm run agent-qa
 EXIT_CODE=$?
 
