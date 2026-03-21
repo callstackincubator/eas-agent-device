@@ -9,6 +9,7 @@ This repo is a minimal Expo + CNG example for running AI-assisted Android QA on 
 - Runs a small Node.js QA agent built with the AI SDK `ToolLoopAgent`
 - Uses `agent-device` to drive the Android app, take screenshots, and summarize findings
 - Posts the QA summary back to the GitHub pull request with `github-comment`
+- Optionally uploads screenshots to Vercel Blob so the PR comment can link them
 
 `qa-release` is the fast review artifact for PR automation. It is not the production shipping artifact.
 
@@ -31,6 +32,7 @@ Optional environment variables for the QA job:
 - `AGENT_DEVICE_ANDROID_DEVICE`: Android AVD name to boot in CI
 - `AGENT_DEVICE_ANDROID_SERIAL`: Specific emulator/device serial to target
 - `QA_MODEL`: Override the default model (`openai/gpt-5-mini`)
+- `BLOB_READ_WRITE_TOKEN`: Upload screenshots to Vercel Blob and include public links in the PR comment
 
 ## Local smoke test
 

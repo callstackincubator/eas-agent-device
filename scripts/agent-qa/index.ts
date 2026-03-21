@@ -5,6 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 
+import { put } from '@vercel/blob';
 import { ToolLoopAgent, gateway, jsonSchema } from 'ai';
 
 type SkillMetadata = {
@@ -18,6 +19,10 @@ type ScreenshotInfo = {
   fileName: string;
   absolutePath: string;
   bytes: number;
+  blobUrl?: string;
+  blobDownloadUrl?: string;
+  blobPathname?: string;
+  uploadError?: string;
 };
 
 type ResultStatus = 'passed' | 'failed' | 'blocked' | 'not_tested';
@@ -72,6 +77,7 @@ const COMMENT_PATH = path.join(ARTIFACTS_DIR, 'comment.md');
 const REPORT_PATH = path.join(ARTIFACTS_DIR, 'report.json');
 const AGENT_DEVICE_BIN = resolveAgentDeviceBinary();
 const APK_PATH = process.env.APK_PATH;
+const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
 const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5-mini';
 const EMPTY_INPUT_SCHEMA = jsonSchema({
   type: 'object',
@@ -326,6 +332,56 @@ async function listScreenshots(): Promise<ScreenshotInfo[]> {
   );
 }
 
+async function uploadScreenshotsToBlob(
+  screenshots: ScreenshotInfo[],
+): Promise<ScreenshotInfo[]> {
+  if (!BLOB_READ_WRITE_TOKEN || screenshots.length === 0) {
+    return screenshots;
+  }
+
+  return Promise.all(
+    screenshots.map(async (screenshot) => {
+      try {
+        const fileBuffer = await readFile(screenshot.absolutePath);
+        const pathnameParts = [
+          'agent-qa',
+          context.prNumber ? `pr-${context.prNumber}` : 'pr-unknown',
+          context.buildId || 'local-build',
+          screenshot.fileName,
+        ];
+        const pathname = pathnameParts.join('/');
+        const blob = await put(pathname, fileBuffer, {
+          access: 'public',
+          addRandomSuffix: true,
+          contentType: 'image/png',
+          token: BLOB_READ_WRITE_TOKEN,
+        });
+
+        return {
+          ...screenshot,
+          blobUrl: blob.url,
+          blobDownloadUrl: blob.downloadUrl,
+          blobPathname: blob.pathname,
+        };
+      } catch (unknownError) {
+        const error =
+          unknownError instanceof Error
+            ? unknownError
+            : new Error(String(unknownError));
+
+        console.error(
+          `Failed to upload screenshot ${screenshot.fileName} to Vercel Blob: ${error.message}`,
+        );
+
+        return {
+          ...screenshot,
+          uploadError: error.message,
+        };
+      }
+    }),
+  );
+}
+
 async function writeBlockedReport(error: Error): Promise<void> {
   const summary: ReportInput = {
     overallStatus: 'blocked',
@@ -345,7 +401,7 @@ async function writeBlockedReport(error: Error): Promise<void> {
 
 async function persistReport(reportInput: ReportInput) {
   await ensureArtifactsDir();
-  const screenshots = await listScreenshots();
+  const screenshots = await uploadScreenshotsToBlob(await listScreenshots());
   const report: Report = {
     generatedAt: new Date().toISOString(),
     model: MODEL_ID,
@@ -397,7 +453,20 @@ function renderComment(report: Report): string {
   lines.push('', '### Screenshots');
   if (report.screenshots?.length) {
     for (const screenshot of report.screenshots) {
-      lines.push(`- ${screenshot.fileName} (${screenshot.bytes} bytes)`);
+      const details = [`${screenshot.bytes} bytes`];
+
+      if (screenshot.blobUrl) {
+        lines.push(
+          `- [${screenshot.fileName}](${screenshot.blobUrl}) (${details.join(', ')})`,
+        );
+        continue;
+      }
+
+      if (screenshot.uploadError) {
+        details.push(`upload failed: ${screenshot.uploadError}`);
+      }
+
+      lines.push(`- ${screenshot.fileName} (${details.join(', ')})`);
     }
   } else {
     lines.push('- No screenshots were saved.');
