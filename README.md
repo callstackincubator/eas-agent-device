@@ -65,10 +65,10 @@ AI_GATEWAY_API_KEY=... \
 QA_PLATFORM=ios \
 APP_PATH=/absolute/path/to/MyApp.app \
 APPLICATION_ID=dev.expo.easagentdevice \
-AGENT_DEVICE_IOS_DEVICE="iPhone 16" \
+AGENT_DEVICE_IOS_DEVICE="iPhone 17 Pro" \
 BUILD_ID=test-build \
 PR_JSON='{"number":1,"title":"Test PR","body":"Smoke test"}' \
 node ./scripts/agent-qa/index.ts
 ```
 
-The first iOS workflow run may need a small simulator-name adjustment if the Expo macOS worker exposes a different preferred device than `iPhone 16`.
+The workflow currently defaults to `iPhone 17 Pro`, because that device family is exposed on the current Expo macOS workers.
