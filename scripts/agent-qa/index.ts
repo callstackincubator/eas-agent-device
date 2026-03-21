@@ -16,6 +16,8 @@ type SkillMetadata = {
   skillFilePath: string;
 };
 
+type QaPlatform = 'android' | 'ios';
+
 type ScreenshotInfo = {
   fileName: string;
   absolutePath: string;
@@ -50,6 +52,8 @@ type ReportInput = {
 type Report = ReportInput & {
   generatedAt: string;
   model: string;
+  platform: QaPlatform;
+  platformLabel: string;
   prNumber: number;
   screenshots: ScreenshotInfo[];
   agentDeviceTrace: AgentDeviceTraceEntry[];
@@ -87,10 +91,13 @@ const ARTIFACTS_DIR = path.join(ROOT_DIR, 'artifacts', 'qa');
 const SCREENSHOTS_DIR = path.join(tmpdir(), 'agent-qa-screenshots');
 const COMMENT_PATH = path.join(ARTIFACTS_DIR, 'comment.md');
 const REPORT_PATH = path.join(ARTIFACTS_DIR, 'report.json');
+const SECTION_PATH = path.join(ARTIFACTS_DIR, 'section.md');
+const STATUS_PATH = path.join(ARTIFACTS_DIR, 'status.txt');
 const AGENT_DEVICE_BIN = resolveAgentDeviceBinary();
-const APK_PATH = process.env.APK_PATH;
+const QA_PLATFORM = normalizePlatform(process.env.QA_PLATFORM);
+const APP_PATH = process.env.APP_PATH;
 const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
-const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5-mini';
+const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5.4-mini';
 const EMPTY_INPUT_SCHEMA = jsonSchema({
   type: 'object',
   properties: {},
@@ -102,15 +109,27 @@ const SKILL_DIRECTORIES = [
 
 const pr = parseJson<ParsedPr>(process.env.PR_JSON, {});
 const context = {
+  platform: QA_PLATFORM,
+  platformLabel: QA_PLATFORM === 'ios' ? 'iOS' : 'Android',
   buildId: process.env.BUILD_ID || '',
-  buildPath: APK_PATH || '',
+  buildPath: APP_PATH || '',
   prNumber: Number(pr.number || 0),
   workflowUrl: process.env.WORKFLOW_URL || '',
-  androidApplicationId: process.env.ANDROID_APPLICATION_ID || '',
-  emulatorDevice: process.env.AGENT_DEVICE_ANDROID_DEVICE || '',
-  androidSerial: process.env.AGENT_DEVICE_ANDROID_SERIAL || '',
+  applicationId: process.env.APPLICATION_ID || '',
+  deviceName:
+    process.env.DEVICE_NAME ||
+    (QA_PLATFORM === 'ios'
+      ? process.env.AGENT_DEVICE_IOS_DEVICE || ''
+      : process.env.AGENT_DEVICE_ANDROID_DEVICE || ''),
+  deviceSerial:
+    process.env.DEVICE_SERIAL || process.env.AGENT_DEVICE_ANDROID_SERIAL || '',
+  sessionName: process.env.AGENT_DEVICE_SESSION || `qa-${QA_PLATFORM}`,
 };
 const agentDeviceTrace: AgentDeviceTraceEntry[] = [];
+
+function normalizePlatform(value: string | undefined): QaPlatform {
+  return value === 'ios' ? 'ios' : 'android';
+}
 
 function resolveAgentDeviceBinary(): string {
   const local = path.join(ROOT_DIR, 'node_modules', '.bin', 'agent-device');
@@ -266,8 +285,16 @@ function ensureRequiredAgentQaEnvs(): void {
       'Missing required environment variable: AI_GATEWAY_API_KEY',
     );
   }
-  if (!process.env.APK_PATH) {
-    throw new Error('Missing required environment variable: APK_PATH');
+  if (!APP_PATH) {
+    throw new Error('Missing required environment variable: APP_PATH');
+  }
+  if (!context.applicationId) {
+    throw new Error('Missing required environment variable: APPLICATION_ID');
+  }
+  if (context.platform === 'ios' && !context.deviceName) {
+    throw new Error(
+      'Missing required environment variable: AGENT_DEVICE_IOS_DEVICE',
+    );
   }
 }
 
@@ -362,6 +389,7 @@ async function uploadScreenshotsToBlob(
         const fileBuffer = await readFile(screenshot.absolutePath);
         const pathnameParts = [
           'agent-qa',
+          context.platform,
           context.prNumber ? `pr-${context.prNumber}` : 'pr-unknown',
           context.buildId || 'local-build',
           screenshot.fileName,
@@ -403,11 +431,13 @@ async function writeBlockedReport(error: Error): Promise<void> {
   const summary: ReportInput = {
     overallStatus: 'blocked',
     summary: error.message,
-    checked: ['Attempted to run Android QA agent on PR changes'],
+    checked: [
+      `Attempted to run ${context.platformLabel} QA agent on PR changes`,
+    ],
     issues: [error.message],
     nextSteps: [
       'Check the workflow logs for command failures.',
-      'Verify AI_GATEWAY_API_KEY, Android build availability, and emulator configuration.',
+      `Verify AI_GATEWAY_API_KEY, ${context.platformLabel} build availability, and ${context.platform === 'ios' ? 'simulator' : 'emulator'} configuration.`,
     ],
     buildId: context.buildId,
     workflowUrl: context.workflowUrl,
@@ -425,6 +455,8 @@ async function persistReport(reportInput: ReportInput) {
     model: MODEL_ID,
     buildId: context.buildId,
     workflowUrl: context.workflowUrl,
+    platform: context.platform,
+    platformLabel: context.platformLabel,
     prNumber: context.prNumber,
     screenshots,
     agentDeviceTrace: agentDeviceTrace.slice(-20),
@@ -432,6 +464,8 @@ async function persistReport(reportInput: ReportInput) {
   };
 
   await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  await writeFile(SECTION_PATH, trim(renderPlatformSection(report), 16000), 'utf8');
+  await writeFile(STATUS_PATH, `${report.overallStatus}\n`, 'utf8');
   await writeFile(COMMENT_PATH, trim(renderComment(report), 30000), 'utf8');
 
   return {
@@ -442,13 +476,51 @@ async function persistReport(reportInput: ReportInput) {
 }
 
 function renderComment(report: Report): string {
+  return `## Agent QA\n\n${renderPlatformSection(report)}`;
+}
+
+function renderScreenshotRows(
+  screenshots: ScreenshotInfo[],
+  platformLabel: string,
+): string[] {
+  if (screenshots.length === 0) {
+    return ['- No screenshots were saved.'];
+  }
+
+  const screenshotRows = screenshots.map((screenshot) => {
+    if (screenshot.blobUrl) {
+      return `| <a href="${screenshot.blobUrl}"><img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /></a> |`;
+    }
+
+    const details = [screenshot.fileName, `${screenshot.bytes} bytes`];
+    if (screenshot.uploadError) {
+      details.push(`upload failed: ${screenshot.uploadError}`);
+    }
+
+    return details.join(', ');
+  });
+
+  if (screenshots.some((screenshot) => screenshot.blobUrl)) {
+    return [
+      `| ${platformLabel} |`,
+      '| --- |',
+      ...screenshotRows.filter((row) => row.startsWith('|')),
+    ];
+  }
+
+  return screenshotRows
+    .filter((value) => !value.startsWith('|'))
+    .map((row) => `- ${row}`);
+}
+
+function renderPlatformSection(report: Report): string {
   const screenshotByFileName = new Map(
     report.screenshots.map((screenshot) => [screenshot.fileName, screenshot]),
   );
   const lines = [
-    '## Agent QA',
+    `### ${report.platformLabel}`,
     '',
-    `**Overall status:** ${report.overallStatus}`,
+    `**Status:** ${report.overallStatus}`,
     '',
     report.summary || 'No summary was provided.',
     '',
@@ -476,70 +548,19 @@ function renderComment(report: Report): string {
   if (report.evidenceScreenshots?.length) {
     const evidenceRows = report.evidenceScreenshots
       .map((fileName) => screenshotByFileName.get(fileName))
-      .filter((screenshot): screenshot is ScreenshotInfo => Boolean(screenshot))
-      .map((screenshot) => {
-        if (screenshot.blobUrl) {
-          return `| <a href="${screenshot.blobUrl}"><img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /></a> |`;
-        }
+      .filter((screenshot): screenshot is ScreenshotInfo => Boolean(screenshot));
 
-        const details = [`${screenshot.fileName}`, `${screenshot.bytes} bytes`];
-        if (screenshot.uploadError) {
-          details.push(`upload failed: ${screenshot.uploadError}`);
-        }
-
-        return details.join(', ');
-      });
-
-    if (
-      evidenceRows.length > 0 &&
-      report.evidenceScreenshots.some(
-        (fileName) => screenshotByFileName.get(fileName)?.blobUrl,
-      )
-    ) {
-      lines.push('| Android |');
-      lines.push('| --- |');
-      lines.push(...evidenceRows.filter((row) => row.startsWith('|')));
+    if (evidenceRows.length > 0) {
+      lines.push(...renderScreenshotRows(evidenceRows, report.platformLabel));
     } else {
-      const evidenceDetails = evidenceRows.filter((row) => !row.startsWith('|'));
-      if (evidenceDetails.length > 0) {
-        for (const row of evidenceDetails) {
-          lines.push(`- ${row}`);
-        }
-      } else {
-        lines.push('- No matching evidence screenshots were found.');
-      }
+      lines.push('- No matching evidence screenshots were found.');
     }
   } else {
     lines.push('- No evidence screenshots were selected.');
   }
 
   lines.push('', '### Screenshots');
-  if (report.screenshots?.length) {
-    const screenshotRows = report.screenshots.map((screenshot) => {
-      if (screenshot.blobUrl) {
-        return `| <a href="${screenshot.blobUrl}"><img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /></a> |`;
-      }
-
-      const details = [screenshot.fileName, `${screenshot.bytes} bytes`];
-      if (screenshot.uploadError) {
-        details.push(`upload failed: ${screenshot.uploadError}`);
-      }
-
-      return details.join(', ');
-    });
-
-    if (report.screenshots.some((screenshot) => screenshot.blobUrl)) {
-      lines.push('| Android |');
-      lines.push('| --- |');
-      lines.push(...screenshotRows.filter((row) => row.startsWith('|')));
-    } else {
-      for (const row of screenshotRows.filter((value) => !value.startsWith('|'))) {
-        lines.push(`- ${row}`);
-      }
-    }
-  } else {
-    lines.push('- No screenshots were saved.');
-  }
+  lines.push(...renderScreenshotRows(report.screenshots || [], report.platformLabel));
 
   lines.push('', '### Next steps');
   if (report.nextSteps?.length) {
@@ -555,7 +576,7 @@ function renderComment(report: Report): string {
   lines.push(`- Workflow: ${report.workflowUrl || 'n/a'}`);
   lines.push('');
   lines.push('<details>');
-  lines.push('<summary>Full report</summary>');
+  lines.push(`<summary>${report.platformLabel} full report</summary>`);
   lines.push('');
   lines.push('```json');
   lines.push(JSON.stringify(report, null, 2));
@@ -568,9 +589,20 @@ function renderComment(report: Report): string {
 function buildPrompt(skills: SkillMetadata[]): string {
   const prTitle = pr.title || 'Untitled PR';
   const prBody = pr.body || 'No PR body was provided.';
+  const platformSpecificContext =
+    context.platform === 'ios'
+      ? [`- Preferred iOS simulator: ${context.deviceName || 'n/a'}`]
+      : [
+          `- Preferred Android device: ${context.deviceName || 'n/a'}`,
+          `- Preferred Android serial: ${context.deviceSerial || 'n/a'}`,
+        ];
+  const platformSpecificFlow =
+    context.platform === 'ios'
+      ? `For iOS simulator runs, prefer reinstall ${context.applicationId} ${context.buildPath} --platform ios --device "${context.deviceName}", then open ${context.applicationId} --platform ios --device "${context.deviceName}" --relaunch.`
+      : `For Android runs, reinstall the APK first, then open the installed package name ${context.applicationId}. Use --serial only when you have a concrete device serial.`;
 
   return [
-    'Review this pull request and run a lightweight Android QA pass.',
+    `Review this pull request and run a lightweight ${context.platformLabel} QA pass.`,
     '',
     `PR #${context.prNumber}: ${prTitle}`,
     '',
@@ -579,15 +611,17 @@ function buildPrompt(skills: SkillMetadata[]): string {
     'Execution context:',
     `- Build ID: ${context.buildId || 'n/a'}`,
     `- Build path: ${context.buildPath || 'n/a'}`,
-    `- Android application id: ${context.androidApplicationId || 'n/a'}`,
-    `- Preferred emulator device: ${context.emulatorDevice || 'n/a'}`,
-    `- Preferred Android serial: ${context.androidSerial || 'n/a'}`,
+    `- Platform: ${context.platformLabel}`,
+    `- Application id: ${context.applicationId || 'n/a'}`,
+    ...platformSpecificContext,
+    `- Agent-device session: ${context.sessionName}`,
     `- Workflow URL: ${context.workflowUrl || 'n/a'}`,
     `- Temporary screenshot directory: ${SCREENSHOTS_DIR}`,
     '',
     buildSkillsPrompt(skills),
     '',
-    `You must infer concise acceptance criteria from the PR, test only the highest-signal Android flows, load the relevant local skill before relying on it, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
+    platformSpecificFlow,
+    `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, load the relevant local skill before relying on it, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
     'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
     'When you use "unsure", include evidenceScreenshots with the screenshot file names that best represent the feature described in the PR.',
     'Do not end with plain text. Your final action must be a write_report tool call.',
@@ -619,18 +653,21 @@ async function main(): Promise<void> {
   const agent = new ToolLoopAgent({
     model: gateway(MODEL_ID),
     instructions: [
-      'You are an Android QA agent running inside EAS Workflows.',
+      `You are a ${context.platformLabel} QA agent running inside EAS Workflows.`,
       'Treat the app and repository as a black box.',
       'Infer a short list of acceptance criteria from PR metadata, focusing on user-visible behavior.',
-      'Use agent-device to test the Android APK at the provided build path.',
+      `Use agent-device to test the ${context.platform === 'ios' ? 'iOS simulator app bundle' : 'Android build artifact'} at the provided build path.`,
       'Use the local skills list in the prompt. Load a relevant skill before making non-trivial command choices.',
-      'For installation, prefer: reinstall QAApp <build_path> --platform android, then open <application_id> --platform android --session qa-android --relaunch.',
+      context.platform === 'ios'
+        ? `For iOS simulator runs, prefer the named simulator ${context.deviceName} and avoid attaching to physical devices. Reinstall the app bundle first, then open ${context.applicationId} with --device "${context.deviceName}" and --relaunch.`
+        : `For Android runs, install or reinstall the APK first, then open the installed package name ${context.applicationId}.`,
       `Take screenshots for meaningful states and save them temporarily in ${SCREENSHOTS_DIR} with .png filenames.`,
       'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
       'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
       'Do not claim success without evidence from tool results.',
       'If text-based automation evidence is inconclusive but screenshots likely show the relevant UI, report overallStatus as unsure and attach the relevant screenshot file names in evidenceScreenshots.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
+      'When you are done with the simulator or emulator session, prefer close --shutdown.',
       'You must call write_report exactly once before you finish.',
       'Never finish by returning plain text. Finish only by calling write_report.',
     ].join(' '),
@@ -664,9 +701,12 @@ async function main(): Promise<void> {
           buildId: context.buildId,
           buildPath: context.buildPath,
           workflowUrl: context.workflowUrl,
-          androidApplicationId: context.androidApplicationId,
-          emulatorDevice: context.emulatorDevice,
-          androidSerial: context.androidSerial,
+          platform: context.platform,
+          platformLabel: context.platformLabel,
+          applicationId: context.applicationId,
+          deviceName: context.deviceName,
+          deviceSerial: context.deviceSerial,
+          sessionName: context.sessionName,
         }),
       },
       load_skill: {
@@ -756,7 +796,7 @@ async function main(): Promise<void> {
       },
       agent_device: {
         description:
-          'Run an agent-device command for Android UI automation and screenshot capture.',
+          'Run an agent-device command for mobile UI automation and screenshot capture.',
         inputSchema: jsonSchema({
           type: 'object',
           properties: {
@@ -855,7 +895,7 @@ async function main(): Promise<void> {
     await persistReport({
       overallStatus: 'blocked',
       summary: result.text || 'The agent completed without calling write_report.',
-      checked: ['Produce a QA report'],
+      checked: [`Produce a ${context.platformLabel} QA report`],
       issues: ['The write_report tool was not called by the agent.'],
       nextSteps: [
         'Inspect the workflow logs and tighten the agent instructions.',

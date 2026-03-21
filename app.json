@@ -9,6 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
+      "bundleIdentifier": "dev.expo.easagentdevice",
       "supportsTablet": true
     },
     "android": {
