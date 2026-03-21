@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
@@ -73,6 +74,7 @@ type ExecFileError = Error & {
 const execFile = promisify(execFileCallback);
 const ROOT_DIR = process.cwd();
 const ARTIFACTS_DIR = path.join(ROOT_DIR, 'artifacts', 'qa');
+const SCREENSHOTS_DIR = path.join(tmpdir(), 'agent-qa-screenshots');
 const COMMENT_PATH = path.join(ARTIFACTS_DIR, 'comment.md');
 const REPORT_PATH = path.join(ARTIFACTS_DIR, 'report.json');
 const AGENT_DEVICE_BIN = resolveAgentDeviceBinary();
@@ -306,19 +308,23 @@ async function ensureArtifactsDir(): Promise<void> {
   await mkdir(ARTIFACTS_DIR, { recursive: true });
 }
 
+async function ensureScreenshotsDir(): Promise<void> {
+  await mkdir(SCREENSHOTS_DIR, { recursive: true });
+}
+
 async function listScreenshots(): Promise<ScreenshotInfo[]> {
-  if (!existsSync(ARTIFACTS_DIR)) {
+  if (!existsSync(SCREENSHOTS_DIR)) {
     return [];
   }
 
-  const entries = await readdir(ARTIFACTS_DIR);
+  const entries = await readdir(SCREENSHOTS_DIR);
   const screenshots: ScreenshotInfo[] = [];
   for (const entry of entries) {
     if (!entry.endsWith('.png')) {
       continue;
     }
 
-    const absolutePath = path.join(ARTIFACTS_DIR, entry);
+    const absolutePath = path.join(SCREENSHOTS_DIR, entry);
     const fileStat = await stat(absolutePath);
     screenshots.push({
       fileName: entry,
@@ -329,6 +335,31 @@ async function listScreenshots(): Promise<ScreenshotInfo[]> {
 
   return screenshots.sort((left, right) =>
     left.fileName.localeCompare(right.fileName),
+  );
+}
+
+async function cleanupUploadedScreenshots(
+  screenshots: ScreenshotInfo[],
+): Promise<void> {
+  const uploadedScreenshots = screenshots.filter(
+    (screenshot) => screenshot.blobUrl && !screenshot.uploadError,
+  );
+
+  await Promise.all(
+    uploadedScreenshots.map(async (screenshot) => {
+      try {
+        await unlink(screenshot.absolutePath);
+      } catch (unknownError) {
+        const error =
+          unknownError instanceof Error
+            ? unknownError
+            : new Error(String(unknownError));
+
+        console.error(
+          `Failed to remove temporary screenshot ${screenshot.absolutePath}: ${error.message}`,
+        );
+      }
+    }),
   );
 }
 
@@ -401,6 +432,7 @@ async function writeBlockedReport(error: Error): Promise<void> {
 
 async function persistReport(reportInput: ReportInput) {
   await ensureArtifactsDir();
+  await ensureScreenshotsDir();
   const screenshots = await uploadScreenshotsToBlob(await listScreenshots());
   const report: Report = {
     generatedAt: new Date().toISOString(),
@@ -414,6 +446,7 @@ async function persistReport(reportInput: ReportInput) {
 
   await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   await writeFile(COMMENT_PATH, trim(renderComment(report), 12000), 'utf8');
+  await cleanupUploadedScreenshots(screenshots);
 
   return {
     reportPath: REPORT_PATH,
@@ -452,21 +485,27 @@ function renderComment(report: Report): string {
 
   lines.push('', '### Screenshots');
   if (report.screenshots?.length) {
-    for (const screenshot of report.screenshots) {
-      const details = [`${screenshot.bytes} bytes`];
-
+    const screenshotRows = report.screenshots.map((screenshot) => {
       if (screenshot.blobUrl) {
-        lines.push(
-          `- [${screenshot.fileName}](${screenshot.blobUrl}) (${details.join(', ')})`,
-        );
-        continue;
+        return `| [${screenshot.fileName}](${screenshot.blobUrl}) | <img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /> |`;
       }
 
+      const details = [screenshot.fileName, `${screenshot.bytes} bytes`];
       if (screenshot.uploadError) {
         details.push(`upload failed: ${screenshot.uploadError}`);
       }
 
-      lines.push(`- ${screenshot.fileName} (${details.join(', ')})`);
+      return `| ${details.join(', ')} | unavailable |`;
+    });
+
+    if (report.screenshots.some((screenshot) => screenshot.blobUrl)) {
+      lines.push('| Screenshot | Preview |');
+      lines.push('| --- | --- |');
+      lines.push(...screenshotRows);
+    } else {
+      for (const row of screenshotRows) {
+        lines.push(`- ${row.replace(/^\| |\|$/g, '').replace(/ \| /g, ' - ')}`);
+      }
     }
   } else {
     lines.push('- No screenshots were saved.');
@@ -506,10 +545,11 @@ function buildPrompt(skills: SkillMetadata[]): string {
     `- Preferred emulator device: ${context.emulatorDevice || 'n/a'}`,
     `- Preferred Android serial: ${context.androidSerial || 'n/a'}`,
     `- Workflow URL: ${context.workflowUrl || 'n/a'}`,
+    `- Temporary screenshot directory: ${SCREENSHOTS_DIR}`,
     '',
     buildSkillsPrompt(skills),
     '',
-    'You must infer concise acceptance criteria from the PR, test only the highest-signal Android flows, load the relevant local skill before relying on it, save screenshots into artifacts/qa/*.png, and call write_report exactly once before finishing.',
+    `You must infer concise acceptance criteria from the PR, test only the highest-signal Android flows, load the relevant local skill before relying on it, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
     'Do not end with plain text. Your final action must be a write_report tool call.',
   ].join('\n');
 }
@@ -532,6 +572,7 @@ function hasToolActivity(
 
 async function main(): Promise<void> {
   await ensureArtifactsDir();
+  await ensureScreenshotsDir();
   ensureRequiredAgentQaEnvs();
   const skills = await discoverSkills(SKILL_DIRECTORIES);
 
@@ -544,9 +585,9 @@ async function main(): Promise<void> {
       'Use agent-device to test the Android APK at the provided build path.',
       'Use the local skills list in the prompt. Load a relevant skill before making non-trivial command choices.',
       'For installation, prefer: reinstall QAApp <build_path> --platform android, then open <application_id> --platform android --session qa-android --relaunch.',
-      'Take screenshots for meaningful states and save them in artifacts/qa with .png filenames.',
+      `Take screenshots for meaningful states and save them temporarily in ${SCREENSHOTS_DIR} with .png filenames.`,
       'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
-      'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are QA artifacts such as screenshots and reports.',
+      'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
       'Do not claim success without evidence from tool results.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
       'You must call write_report exactly once before you finish.',
@@ -687,7 +728,7 @@ async function main(): Promise<void> {
               type: 'array',
               items: { type: 'string' },
               description:
-                'Remaining CLI arguments. Use artifacts/qa/*.png for screenshots.',
+                `Remaining CLI arguments. Use ${SCREENSHOTS_DIR}/*.png for screenshots.`,
             },
           },
           required: ['command'],

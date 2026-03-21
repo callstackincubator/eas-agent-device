@@ -41,7 +41,7 @@ npm install
 npx tsc --noEmit
 ```
 
-The workflow runner writes its outputs to `artifacts/qa/` during execution. Those files are intentionally not committed.
+The workflow runner writes `comment.md` and `report.json` to `artifacts/qa/` during execution. Temporary screenshots are written outside the workspace, uploaded to Vercel Blob when configured, and then cleaned up.
 
 To execute the runner directly with Node 24, provide the same environment variables the workflow sets:
 
