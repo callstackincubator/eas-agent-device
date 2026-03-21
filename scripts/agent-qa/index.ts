@@ -479,7 +479,7 @@ function renderComment(report: Report): string {
       .filter((screenshot): screenshot is ScreenshotInfo => Boolean(screenshot))
       .map((screenshot) => {
         if (screenshot.blobUrl) {
-          return `| [${screenshot.fileName}](${screenshot.blobUrl}) | <img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /> |`;
+          return `| <a href="${screenshot.blobUrl}"><img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /></a> |`;
         }
 
         const details = [`${screenshot.fileName}`, `${screenshot.bytes} bytes`];
@@ -487,15 +487,27 @@ function renderComment(report: Report): string {
           details.push(`upload failed: ${screenshot.uploadError}`);
         }
 
-        return `| ${details.join(', ')} | unavailable |`;
+        return details.join(', ');
       });
 
-    if (evidenceRows.length > 0) {
-      lines.push('| Screenshot | Preview |');
-      lines.push('| --- | --- |');
-      lines.push(...evidenceRows);
+    if (
+      evidenceRows.length > 0 &&
+      report.evidenceScreenshots.some(
+        (fileName) => screenshotByFileName.get(fileName)?.blobUrl,
+      )
+    ) {
+      lines.push('| Android |');
+      lines.push('| --- |');
+      lines.push(...evidenceRows.filter((row) => row.startsWith('|')));
     } else {
-      lines.push('- No matching evidence screenshots were found.');
+      const evidenceDetails = evidenceRows.filter((row) => !row.startsWith('|'));
+      if (evidenceDetails.length > 0) {
+        for (const row of evidenceDetails) {
+          lines.push(`- ${row}`);
+        }
+      } else {
+        lines.push('- No matching evidence screenshots were found.');
+      }
     }
   } else {
     lines.push('- No evidence screenshots were selected.');
@@ -505,7 +517,7 @@ function renderComment(report: Report): string {
   if (report.screenshots?.length) {
     const screenshotRows = report.screenshots.map((screenshot) => {
       if (screenshot.blobUrl) {
-        return `| [${screenshot.fileName}](${screenshot.blobUrl}) | <img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /> |`;
+        return `| <a href="${screenshot.blobUrl}"><img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /></a> |`;
       }
 
       const details = [screenshot.fileName, `${screenshot.bytes} bytes`];
@@ -513,16 +525,16 @@ function renderComment(report: Report): string {
         details.push(`upload failed: ${screenshot.uploadError}`);
       }
 
-      return `| ${details.join(', ')} | unavailable |`;
+      return details.join(', ');
     });
 
     if (report.screenshots.some((screenshot) => screenshot.blobUrl)) {
-      lines.push('| Screenshot | Preview |');
-      lines.push('| --- | --- |');
-      lines.push(...screenshotRows);
+      lines.push('| Android |');
+      lines.push('| --- |');
+      lines.push(...screenshotRows.filter((row) => row.startsWith('|')));
     } else {
-      for (const row of screenshotRows) {
-        lines.push(`- ${row.replace(/^\| |\|$/g, '').replace(/ \| /g, ' - ')}`);
+      for (const row of screenshotRows.filter((value) => !value.startsWith('|'))) {
+        lines.push(`- ${row}`);
       }
     }
   } else {
