@@ -98,11 +98,16 @@ jobs:
           EXIT_CODE=$?
 
           if [ -f artifacts/qa/comment.md ]; then
+            echo "artifacts/qa/comment.md exists"
+            echo "comment preview:"
+            head -n 40 artifacts/qa/comment.md || true
             COMMENT_BODY="$(cat artifacts/qa/comment.md)"
           else
+            echo "artifacts/qa/comment.md is missing"
             COMMENT_BODY=$'## Agent QA\n\nThe QA runner did not produce a markdown report.\n\n- Build ID: '"${BUILD_ID}"$'\n- Workflow: '"${WORKFLOW_URL}"
           fi
 
+          echo "comment body length: ${#COMMENT_BODY}"
           set-output comment_body "$COMMENT_BODY"
           set-output build_id "$BUILD_ID"
           exit $EXIT_CODE

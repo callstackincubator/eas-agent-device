@@ -670,10 +670,14 @@ async function main(): Promise<void> {
         'Inspect the workflow logs and tighten the agent instructions.',
       ],
     });
+    console.log(
+      `Fallback QA report written to ${COMMENT_PATH} because write_report was not called.`,
+    );
     return;
   }
 
   console.log(`QA report written to ${COMMENT_PATH}`);
+  console.log(`Structured report written to ${REPORT_PATH}`);
 }
 
 try {
