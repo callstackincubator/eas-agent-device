@@ -89,6 +89,7 @@ jobs:
     runs_on: linux-medium-nested-virtualization
     outputs:
       status: ${{ steps.run_agent_qa.outputs.status }}
+      status_label: ${{ steps.run_agent_qa.outputs.status_label }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
     env:
       BUILD_ID: ${{ after.android_repack.outputs.build_id || after.android_build.outputs.build_id }}
@@ -125,6 +126,7 @@ jobs:
     runs_on: macos-medium
     outputs:
       status: ${{ steps.run_agent_qa.outputs.status }}
+      status_label: ${{ steps.run_agent_qa.outputs.status_label }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
     env:
       BUILD_ID: ${{ after.ios_repack.outputs.build_id || after.ios_build.outputs.build_id }}
@@ -170,8 +172,8 @@ jobs:
 
           | Platform | Status |
           | --- | --- |
-          | Android | ${{ after.qa_android.outputs.status || 'blocked' }} |
-          | iOS | ${{ after.qa_ios.outputs.status || 'blocked' }} |
+          | Android | ${{ after.qa_android.outputs.status_label || '⛔ blocked' }} |
+          | iOS | ${{ after.qa_ios.outputs.status_label || '⛔ blocked' }} |
 
           ${{ after.qa_android.outputs.section_body || '### Android\n\n**Status:** blocked\n\nNo Android QA section was produced.\n' }}
 

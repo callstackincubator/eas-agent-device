@@ -44,7 +44,6 @@ type ReportInput = {
   checked?: string[];
   issues?: string[];
   nextSteps?: string[];
-  evidenceScreenshots?: string[];
 };
 
 type Report = ReportInput & {
@@ -496,14 +495,27 @@ function renderScreenshotRows(
     .map((row) => `- ${row}`);
 }
 
+function getStatusEmoji(status: ResultStatus): string {
+  switch (status) {
+    case 'passed':
+      return '✅';
+    case 'failed':
+      return '❌';
+    case 'blocked':
+      return '⛔';
+    case 'unsure':
+      return '🤔';
+    case 'not_tested':
+    default:
+      return '⚪';
+  }
+}
+
 function renderPlatformSection(report: Report): string {
-  const screenshotByFileName = new Map(
-    report.screenshots.map((screenshot) => [screenshot.fileName, screenshot]),
-  );
   const lines = [
     `### ${report.platformLabel}`,
     '',
-    `**Status:** ${report.overallStatus}`,
+    `**Status:** ${getStatusEmoji(report.overallStatus)} ${report.overallStatus}`,
     '',
     report.summary || 'No summary was provided.',
     '',
@@ -525,21 +537,6 @@ function renderPlatformSection(report: Report): string {
     }
   } else {
     lines.push('- No issues noted.');
-  }
-
-  lines.push('', '### Evidence');
-  if (report.evidenceScreenshots?.length) {
-    const evidenceRows = report.evidenceScreenshots
-      .map((fileName) => screenshotByFileName.get(fileName))
-      .filter((screenshot): screenshot is ScreenshotInfo => Boolean(screenshot));
-
-    if (evidenceRows.length > 0) {
-      lines.push(...renderScreenshotRows(evidenceRows, report.platformLabel));
-    } else {
-      lines.push('- No matching evidence screenshots were found.');
-    }
-  } else {
-    lines.push('- No evidence screenshots were selected.');
   }
 
   lines.push('', '### Screenshots');
@@ -602,7 +599,6 @@ function buildPrompt(skills: SkillMetadata[]): string {
     platformSpecificFlow,
     `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, load the relevant local skill before relying on it, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
     'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
-    'When you use "unsure", include evidenceScreenshots with the screenshot file names that best represent the feature described in the PR.',
     'Do not end with plain text. Your final action must be a write_report tool call.',
   ].join('\n');
 }
@@ -645,7 +641,7 @@ async function main(): Promise<void> {
       'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
       'Do not claim success without evidence from tool results.',
       'The workflow pre-binds the mobile target. Avoid explicit routing flags like --device, --udid, --serial, or --session in normal app commands unless you are inspecting device inventory.',
-      'If text-based automation evidence is inconclusive but screenshots likely show the relevant UI, report overallStatus as unsure and attach the relevant screenshot file names in evidenceScreenshots.',
+      'If text-based automation evidence is inconclusive but screenshots likely show the relevant UI, report overallStatus as unsure.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
       'When you are done with the simulator or emulator session, prefer close --shutdown.',
       'You must call write_report exactly once before you finish.',
@@ -845,12 +841,6 @@ async function main(): Promise<void> {
             nextSteps: {
               type: 'array',
               items: { type: 'string' },
-            },
-            evidenceScreenshots: {
-              type: 'array',
-              items: { type: 'string' },
-              description:
-                'Screenshot file names that best show the feature or visual change being discussed.',
             },
           },
           required: ['overallStatus', 'summary'],
