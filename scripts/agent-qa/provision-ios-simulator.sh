@@ -3,11 +3,8 @@
 set -euxo pipefail
 
 DEVICE_NAME="${AGENT_DEVICE_IOS_DEVICE:?AGENT_DEVICE_IOS_DEVICE is required}"
-DEVICE_CANDIDATES="${AGENT_DEVICE_IOS_DEVICE_CANDIDATES:-${DEVICE_NAME},iPhone 17 Pro Max,iPhone 17,iPhone Air,iPhone 16e}"
 export AGENT_DEVICE_DAEMON_TIMEOUT_MS="${AGENT_DEVICE_DAEMON_TIMEOUT_MS:-180000}"
 export AGENT_DEVICE_IOS_BOOT_TIMEOUT_MS="${AGENT_DEVICE_IOS_BOOT_TIMEOUT_MS:-180000}"
-
-npx agent-device devices --platform ios || true
 
 if ! npx agent-device ensure-simulator --platform ios --device "${DEVICE_NAME}" --boot; then
   echo "agent-device ensure-simulator failed, falling back to simctl provisioning"
@@ -16,12 +13,11 @@ if ! npx agent-device ensure-simulator --platform ios --device "${DEVICE_NAME}" 
   xcrun simctl list --json devicetypes runtimes devices available > "${SIMCTL_JSON}"
 
   readarray -t SIMCTL_VALUES < <(
-    python3 - "${SIMCTL_JSON}" "${DEVICE_CANDIDATES}" <<'PY'
+    python3 - "${SIMCTL_JSON}" "${DEVICE_NAME}" <<'PY'
 import json
 import sys
 
-json_path, raw_candidates = sys.argv[1], sys.argv[2]
-candidates = [item.strip() for item in raw_candidates.split(",") if item.strip()]
+json_path, selected_device_name = sys.argv[1], sys.argv[2]
 with open(json_path, "r", encoding="utf-8") as fp:
     data = json.load(fp)
 
@@ -31,14 +27,8 @@ available_device_types = {
     if item.get("name") and item.get("identifier")
 }
 
-selected_device_name = ""
 device_type_id = ""
-for candidate in candidates:
-    identifier = available_device_types.get(candidate)
-    if identifier:
-        selected_device_name = candidate
-        device_type_id = identifier
-        break
+device_type_id = available_device_types.get(selected_device_name, "")
 
 runtime_id = ""
 runtime_name = ""
@@ -76,7 +66,7 @@ PY
   EXISTING_UDID="${SIMCTL_VALUES[4]:-}"
 
   if [ -z "${SELECTED_DEVICE_NAME}" ] || [ -z "${DEVICE_TYPE_ID}" ]; then
-    echo "Could not resolve simctl device type for candidates: ${DEVICE_CANDIDATES}" >&2
+    echo "Could not resolve simctl device type for requested device: ${DEVICE_NAME}" >&2
     exit 1
   fi
 
@@ -100,5 +90,3 @@ fi
 if command -v set-env >/dev/null 2>&1; then
   set-env AGENT_DEVICE_IOS_DEVICE "${DEVICE_NAME}"
 fi
-
-npx agent-device devices --platform ios || true

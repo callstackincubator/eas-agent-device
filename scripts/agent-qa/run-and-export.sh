@@ -22,13 +22,18 @@ set +e
 export APP_PATH="${APP_PATH_ARG}"
 
 BOOTSTRAP_ERROR=""
-BOOTSTRAP_STEP="reinstall"
-npx agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
+if [ "${QA_PLATFORM_VALUE}" = "android" ]; then
+  BOOTSTRAP_STEP="install"
+  npx agent-device install "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
+else
+  BOOTSTRAP_STEP="reinstall"
+  npx agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
+fi
 BOOTSTRAP_EXIT=$?
 
 if [ "${BOOTSTRAP_EXIT}" -ne 0 ] && [ "${QA_PLATFORM_VALUE}" = "android" ]; then
-  BOOTSTRAP_STEP="install"
-  npx agent-device install "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
+  BOOTSTRAP_STEP="reinstall"
+  npx agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
   BOOTSTRAP_EXIT=$?
 fi
 

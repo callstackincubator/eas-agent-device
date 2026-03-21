@@ -135,8 +135,7 @@ jobs:
       QA_MODEL: openai/gpt-5.4-mini
       QA_PLATFORM: ios
       APPLICATION_ID: dev.expo.easagentdevice
-      AGENT_DEVICE_IOS_DEVICE: iPhone 17 Pro
-      AGENT_DEVICE_IOS_DEVICE_CANDIDATES: iPhone 17 Pro,iPhone 17 Pro Max,iPhone 17,iPhone Air,iPhone 16e
+      AGENT_DEVICE_IOS_DEVICE: iPhone 17
       AGENT_DEVICE_DAEMON_TIMEOUT_MS: "180000"
       AGENT_DEVICE_IOS_BOOT_TIMEOUT_MS: "180000"
     steps:
