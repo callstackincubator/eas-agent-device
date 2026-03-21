@@ -26,6 +26,14 @@ type ScreenshotInfo = {
   uploadError?: string;
 };
 
+type AgentDeviceTraceEntry = {
+  command: string;
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
 type ResultStatus = 'passed' | 'failed' | 'blocked' | 'not_tested';
 
 type ReportInput = {
@@ -43,6 +51,7 @@ type Report = ReportInput & {
   model: string;
   prNumber: number;
   screenshots: ScreenshotInfo[];
+  agentDeviceTrace: AgentDeviceTraceEntry[];
 };
 
 type ParsedPr = {
@@ -100,6 +109,7 @@ const context = {
   emulatorDevice: process.env.AGENT_DEVICE_ANDROID_DEVICE || '',
   androidSerial: process.env.AGENT_DEVICE_ANDROID_SERIAL || '',
 };
+const agentDeviceTrace: AgentDeviceTraceEntry[] = [];
 
 function resolveAgentDeviceBinary(): string {
   const local = path.join(ROOT_DIR, 'node_modules', '.bin', 'agent-device');
@@ -441,6 +451,7 @@ async function persistReport(reportInput: ReportInput) {
     workflowUrl: context.workflowUrl,
     prNumber: context.prNumber,
     screenshots,
+    agentDeviceTrace: agentDeviceTrace.slice(-20),
     ...reportInput,
   };
 
@@ -754,6 +765,13 @@ async function main(): Promise<void> {
             [command, ...args],
             { allowFailure: true },
           );
+          agentDeviceTrace.push({
+            command: [command, ...args].join(' '),
+            ok: result.ok,
+            exitCode: result.exitCode,
+            stdout: trim(result.stdout, 4000),
+            stderr: trim(result.stderr, 2000),
+          });
           return {
             ok: result.ok,
             exitCode: result.exitCode,
