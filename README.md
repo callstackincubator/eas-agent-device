@@ -9,13 +9,17 @@ This repo is a minimal Expo + CNG example for running AI-assisted Android QA on 
 - Runs a small Node.js QA agent built with the AI SDK `ToolLoopAgent`
 - Uses `agent-device` to drive the Android app, take screenshots, and summarize findings
 - Posts the QA summary back to the GitHub pull request with `github-comment`
+- Includes an additive custom-build path that uploads screenshots and QA reports as build artifacts
 
 `qa-release` is the fast review artifact for PR automation. It is not the production shipping artifact.
+`qa-agent` is the custom-build profile for artifact-backed QA runs.
 
 ## Files
 
 - [eas.json](./eas.json)
 - [.eas/workflows/agent-qa-android.yml](./.eas/workflows/agent-qa-android.yml)
+- [.eas/workflows/agent-qa-android-artifacts.yml](./.eas/workflows/agent-qa-android-artifacts.yml)
+- [.eas/build/qa-agent-android.yml](./.eas/build/qa-agent-android.yml)
 - [scripts/agent-qa/index.ts](./scripts/agent-qa/index.ts)
 
 ## Required setup
@@ -25,6 +29,7 @@ This repo is a minimal Expo + CNG example for running AI-assisted Android QA on 
 3. Configure an EAS environment named `preview`.
 4. Add `AI_GATEWAY_API_KEY` to that environment.
 5. Treat the `qa-release` profile as CI review output only. Keep store or production release flows separate.
+6. If you want to use the artifact-backed custom-build workflow, enable the old Build Infrastructure in Expo project settings. Expo currently documents `eas/start_android_emulator` with that requirement.
 
 Optional environment variables for the QA job:
 
