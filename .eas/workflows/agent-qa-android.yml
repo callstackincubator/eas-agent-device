@@ -77,16 +77,6 @@ jobs:
       - id: provision_android_emulator
         run: |
           bash ./scripts/agent-qa/provision-android-emulator.sh
-      - id: debug_agent_device
-        run: |
-          set -euxo pipefail
-          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}"
-          export ANDROID_HOME="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-          export PATH="$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/tools/bin:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-          node -v
-          emulator -list-avds || true
-          npx agent-device --version
-          npx agent-device devices --platform android || true
       - id: run_agent_qa
         env:
           AGENT_DEVICE_SESSION: qa-android
@@ -98,16 +88,11 @@ jobs:
           EXIT_CODE=$?
 
           if [ -f artifacts/qa/comment.md ]; then
-            echo "artifacts/qa/comment.md exists"
-            echo "comment preview:"
-            head -n 40 artifacts/qa/comment.md || true
             COMMENT_BODY="$(cat artifacts/qa/comment.md)"
           else
-            echo "artifacts/qa/comment.md is missing"
             COMMENT_BODY=$'## Agent QA\n\nThe QA runner did not produce a markdown report.\n\n- Build ID: '"${BUILD_ID}"$'\n- Workflow: '"${WORKFLOW_URL}"
           fi
 
-          echo "comment body length: ${#COMMENT_BODY}"
           set-output comment_body "$COMMENT_BODY"
           set-output build_id "$BUILD_ID"
           exit $EXIT_CODE
