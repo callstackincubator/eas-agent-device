@@ -110,7 +110,7 @@ jobs:
   qa_comment:
     name: Comment on PR
     after: [qa_android]
-    if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ always() && github.event_name == 'pull_request' }}
     type: github-comment
     params:
       payload: |

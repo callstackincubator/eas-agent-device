@@ -651,7 +651,14 @@ async function main(): Promise<void> {
     prompt: buildPrompt(skills),
   });
 
-  console.log(trim(result.text || 'Agent completed without final text.', 4000));
+  console.log(
+    trim(
+      result.text
+        ? `Agent finished with final text:\n${result.text}`
+        : 'Agent finished without final text. This is expected when it only uses tools.',
+      4000,
+    ),
+  );
 
   if (!existsSync(COMMENT_PATH)) {
     await persistReport({
@@ -665,6 +672,8 @@ async function main(): Promise<void> {
     });
     return;
   }
+
+  console.log(`QA report written to ${COMMENT_PATH}`);
 }
 
 try {
