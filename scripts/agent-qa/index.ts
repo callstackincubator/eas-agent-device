@@ -445,7 +445,7 @@ async function persistReport(reportInput: ReportInput) {
   };
 
   await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  await writeFile(COMMENT_PATH, trim(renderComment(report), 12000), 'utf8');
+  await writeFile(COMMENT_PATH, trim(renderComment(report), 30000), 'utf8');
   await cleanupUploadedScreenshots(screenshots);
 
   return {
@@ -523,6 +523,14 @@ function renderComment(report: Report): string {
   lines.push('', '### Metadata');
   lines.push(`- Build ID: \`${report.buildId || 'n/a'}\``);
   lines.push(`- Workflow: ${report.workflowUrl || 'n/a'}`);
+  lines.push('');
+  lines.push('<details>');
+  lines.push('<summary>Full report</summary>');
+  lines.push('');
+  lines.push('```json');
+  lines.push(JSON.stringify(report, null, 2));
+  lines.push('```');
+  lines.push('</details>');
 
   return `${lines.join('\n')}\n`;
 }
