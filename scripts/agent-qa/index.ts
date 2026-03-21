@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -349,31 +349,6 @@ async function listScreenshots(): Promise<ScreenshotInfo[]> {
   );
 }
 
-async function cleanupUploadedScreenshots(
-  screenshots: ScreenshotInfo[],
-): Promise<void> {
-  const uploadedScreenshots = screenshots.filter(
-    (screenshot) => screenshot.blobUrl && !screenshot.uploadError,
-  );
-
-  await Promise.all(
-    uploadedScreenshots.map(async (screenshot) => {
-      try {
-        await unlink(screenshot.absolutePath);
-      } catch (unknownError) {
-        const error =
-          unknownError instanceof Error
-            ? unknownError
-            : new Error(String(unknownError));
-
-        console.error(
-          `Failed to remove temporary screenshot ${screenshot.absolutePath}: ${error.message}`,
-        );
-      }
-    }),
-  );
-}
-
 async function uploadScreenshotsToBlob(
   screenshots: ScreenshotInfo[],
 ): Promise<ScreenshotInfo[]> {
@@ -458,7 +433,6 @@ async function persistReport(reportInput: ReportInput) {
 
   await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   await writeFile(COMMENT_PATH, trim(renderComment(report), 30000), 'utf8');
-  await cleanupUploadedScreenshots(screenshots);
 
   return {
     reportPath: REPORT_PATH,
