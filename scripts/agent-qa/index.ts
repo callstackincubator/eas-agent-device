@@ -34,7 +34,7 @@ type AgentDeviceTraceEntry = {
   stderr: string;
 };
 
-type ResultStatus = 'passed' | 'failed' | 'blocked' | 'not_tested';
+type ResultStatus = 'passed' | 'failed' | 'blocked' | 'not_tested' | 'unsure';
 
 type ReportInput = {
   overallStatus: ResultStatus;
@@ -42,6 +42,7 @@ type ReportInput = {
   checked?: string[];
   issues?: string[];
   nextSteps?: string[];
+  evidenceScreenshots?: string[];
   buildId?: string;
   workflowUrl?: string;
 };
@@ -467,6 +468,9 @@ async function persistReport(reportInput: ReportInput) {
 }
 
 function renderComment(report: Report): string {
+  const screenshotByFileName = new Map(
+    report.screenshots.map((screenshot) => [screenshot.fileName, screenshot]),
+  );
   const lines = [
     '## Agent QA',
     '',
@@ -492,6 +496,35 @@ function renderComment(report: Report): string {
     }
   } else {
     lines.push('- No issues noted.');
+  }
+
+  lines.push('', '### Evidence');
+  if (report.evidenceScreenshots?.length) {
+    const evidenceRows = report.evidenceScreenshots
+      .map((fileName) => screenshotByFileName.get(fileName))
+      .filter((screenshot): screenshot is ScreenshotInfo => Boolean(screenshot))
+      .map((screenshot) => {
+        if (screenshot.blobUrl) {
+          return `| [${screenshot.fileName}](${screenshot.blobUrl}) | <img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /> |`;
+        }
+
+        const details = [`${screenshot.fileName}`, `${screenshot.bytes} bytes`];
+        if (screenshot.uploadError) {
+          details.push(`upload failed: ${screenshot.uploadError}`);
+        }
+
+        return `| ${details.join(', ')} | unavailable |`;
+      });
+
+    if (evidenceRows.length > 0) {
+      lines.push('| Screenshot | Preview |');
+      lines.push('| --- | --- |');
+      lines.push(...evidenceRows);
+    } else {
+      lines.push('- No matching evidence screenshots were found.');
+    }
+  } else {
+    lines.push('- No evidence screenshots were selected.');
   }
 
   lines.push('', '### Screenshots');
@@ -569,6 +602,8 @@ function buildPrompt(skills: SkillMetadata[]): string {
     buildSkillsPrompt(skills),
     '',
     `You must infer concise acceptance criteria from the PR, test only the highest-signal Android flows, load the relevant local skill before relying on it, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
+    'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
+    'When you use "unsure", include evidenceScreenshots with the screenshot file names that best represent the feature described in the PR.',
     'Do not end with plain text. Your final action must be a write_report tool call.',
   ].join('\n');
 }
@@ -608,6 +643,7 @@ async function main(): Promise<void> {
       'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
       'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
       'Do not claim success without evidence from tool results.',
+      'If text-based automation evidence is inconclusive but screenshots likely show the relevant UI, report overallStatus as unsure and attach the relevant screenshot file names in evidenceScreenshots.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
       'You must call write_report exactly once before you finish.',
       'Never finish by returning plain text. Finish only by calling write_report.',
@@ -789,7 +825,7 @@ async function main(): Promise<void> {
           properties: {
             overallStatus: {
               type: 'string',
-              enum: ['passed', 'failed', 'blocked', 'not_tested'],
+              enum: ['passed', 'failed', 'blocked', 'not_tested', 'unsure'],
             },
             summary: {
               type: 'string',
@@ -805,6 +841,12 @@ async function main(): Promise<void> {
             nextSteps: {
               type: 'array',
               items: { type: 'string' },
+            },
+            evidenceScreenshots: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Screenshot file names that best show the feature or visual change being discussed.',
             },
           },
           required: ['overallStatus', 'summary'],
