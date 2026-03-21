@@ -15,14 +15,6 @@
         "buildType": "apk"
       }
     },
-    "qa-agent": {
-      "distribution": "internal",
-      "environment": "preview",
-      "android": {
-        "buildType": "apk",
-        "config": "qa-agent-android.yml"
-      }
-    },
     "production": {
       "environment": "production"
     }
