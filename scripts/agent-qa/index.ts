@@ -45,13 +45,13 @@ type ReportInput = {
   issues?: string[];
   nextSteps?: string[];
   evidenceScreenshots?: string[];
-  buildId?: string;
-  workflowUrl?: string;
 };
 
 type Report = ReportInput & {
   generatedAt: string;
   model: string;
+  buildId: string;
+  workflowUrl: string;
   platform: QaPlatform;
   platformLabel: string;
   prNumber: number;
@@ -89,7 +89,6 @@ const execFile = promisify(execFileCallback);
 const ROOT_DIR = process.cwd();
 const ARTIFACTS_DIR = path.join(ROOT_DIR, 'artifacts', 'qa');
 const SCREENSHOTS_DIR = path.join(tmpdir(), 'agent-qa-screenshots');
-const COMMENT_PATH = path.join(ARTIFACTS_DIR, 'comment.md');
 const REPORT_PATH = path.join(ARTIFACTS_DIR, 'report.json');
 const SECTION_PATH = path.join(ARTIFACTS_DIR, 'section.md');
 const STATUS_PATH = path.join(ARTIFACTS_DIR, 'status.txt');
@@ -121,9 +120,6 @@ const context = {
     (QA_PLATFORM === 'ios'
       ? process.env.AGENT_DEVICE_IOS_DEVICE || ''
       : process.env.AGENT_DEVICE_ANDROID_DEVICE || ''),
-  deviceSerial:
-    process.env.DEVICE_SERIAL || process.env.AGENT_DEVICE_ANDROID_SERIAL || '',
-  sessionName: process.env.AGENT_DEVICE_SESSION || `qa-${QA_PLATFORM}`,
 };
 const agentDeviceTrace: AgentDeviceTraceEntry[] = [];
 
@@ -439,8 +435,6 @@ async function writeBlockedReport(error: Error): Promise<void> {
       'Check the workflow logs for command failures.',
       `Verify AI_GATEWAY_API_KEY, ${context.platformLabel} build availability, and ${context.platform === 'ios' ? 'simulator' : 'emulator'} configuration.`,
     ],
-    buildId: context.buildId,
-    workflowUrl: context.workflowUrl,
   };
 
   await persistReport(summary);
@@ -466,17 +460,6 @@ async function persistReport(reportInput: ReportInput) {
   await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   await writeFile(SECTION_PATH, trim(renderPlatformSection(report), 16000), 'utf8');
   await writeFile(STATUS_PATH, `${report.overallStatus}\n`, 'utf8');
-  await writeFile(COMMENT_PATH, trim(renderComment(report), 30000), 'utf8');
-
-  return {
-    reportPath: REPORT_PATH,
-    commentPath: COMMENT_PATH,
-    screenshotCount: screenshots.length,
-  };
-}
-
-function renderComment(report: Report): string {
-  return `## Agent QA\n\n${renderPlatformSection(report)}`;
 }
 
 function renderScreenshotRows(
@@ -592,14 +575,11 @@ function buildPrompt(skills: SkillMetadata[]): string {
   const platformSpecificContext =
     context.platform === 'ios'
       ? [`- Preferred iOS simulator: ${context.deviceName || 'n/a'}`]
-      : [
-          `- Preferred Android device: ${context.deviceName || 'n/a'}`,
-          `- Preferred Android serial: ${context.deviceSerial || 'n/a'}`,
-        ];
+      : [`- Preferred Android device: ${context.deviceName || 'n/a'}`];
   const platformSpecificFlow =
     context.platform === 'ios'
-      ? `For iOS simulator runs, prefer reinstall ${context.applicationId} ${context.buildPath} --platform ios --device "${context.deviceName}", then open ${context.applicationId} --platform ios --device "${context.deviceName}" --relaunch.`
-      : `For Android runs, reinstall the APK first, then open the installed package name ${context.applicationId}. Use --serial only when you have a concrete device serial.`;
+      ? `For iOS simulator runs, the workflow already binds the session to ${context.deviceName}. Prefer reinstall ${context.applicationId} ${context.buildPath}, then open ${context.applicationId} --relaunch. Do not pass --device, --udid, or --session in normal app commands.`
+      : `For Android runs, the workflow already binds the session to ${context.deviceName || 'the booted emulator'}. Try reinstall ${context.applicationId} ${context.buildPath} first. If reinstall fails during uninstall, retry with install ${context.applicationId} ${context.buildPath}. Then open ${context.applicationId} --relaunch.`;
 
   return [
     `Review this pull request and run a lightweight ${context.platformLabel} QA pass.`,
@@ -614,7 +594,6 @@ function buildPrompt(skills: SkillMetadata[]): string {
     `- Platform: ${context.platformLabel}`,
     `- Application id: ${context.applicationId || 'n/a'}`,
     ...platformSpecificContext,
-    `- Agent-device session: ${context.sessionName}`,
     `- Workflow URL: ${context.workflowUrl || 'n/a'}`,
     `- Temporary screenshot directory: ${SCREENSHOTS_DIR}`,
     '',
@@ -659,12 +638,13 @@ async function main(): Promise<void> {
       `Use agent-device to test the ${context.platform === 'ios' ? 'iOS simulator app bundle' : 'Android build artifact'} at the provided build path.`,
       'Use the local skills list in the prompt. Load a relevant skill before making non-trivial command choices.',
       context.platform === 'ios'
-        ? `For iOS simulator runs, prefer the named simulator ${context.deviceName} and avoid attaching to physical devices. Reinstall the app bundle first, then open ${context.applicationId} with --device "${context.deviceName}" and --relaunch.`
-        : `For Android runs, install or reinstall the APK first, then open the installed package name ${context.applicationId}.`,
+        ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Reinstall the app bundle first, then open ${context.applicationId} --relaunch. Do not pass --device, --udid, --serial, or --session in normal app commands.`
+        : `For Android runs, install or reinstall the APK first, then open the installed package name ${context.applicationId}. If reinstall fails during uninstall, retry with install before giving up.`,
       `Take screenshots for meaningful states and save them temporarily in ${SCREENSHOTS_DIR} with .png filenames.`,
       'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
       'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
       'Do not claim success without evidence from tool results.',
+      'The workflow pre-binds the mobile target. Avoid explicit routing flags like --device, --udid, --serial, or --session in normal app commands unless you are inspecting device inventory.',
       'If text-based automation evidence is inconclusive but screenshots likely show the relevant UI, report overallStatus as unsure and attach the relevant screenshot file names in evidenceScreenshots.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
       'When you are done with the simulator or emulator session, prefer close --shutdown.',
@@ -705,8 +685,6 @@ async function main(): Promise<void> {
           platformLabel: context.platformLabel,
           applicationId: context.applicationId,
           deviceName: context.deviceName,
-          deviceSerial: context.deviceSerial,
-          sessionName: context.sessionName,
         }),
       },
       load_skill: {
@@ -891,7 +869,7 @@ async function main(): Promise<void> {
     console.log(trim(`Agent finished with final text:\n${result.text}`, 4000));
   }
 
-  if (!existsSync(COMMENT_PATH)) {
+  if (!existsSync(SECTION_PATH)) {
     await persistReport({
       overallStatus: 'blocked',
       summary: result.text || 'The agent completed without calling write_report.',
@@ -902,12 +880,12 @@ async function main(): Promise<void> {
       ],
     });
     console.log(
-      `Fallback QA report written to ${COMMENT_PATH} because write_report was not called.`,
+      `Fallback QA report written to ${SECTION_PATH} because write_report was not called.`,
     );
     return;
   }
 
-  console.log(`QA report written to ${COMMENT_PATH}`);
+  console.log(`QA report written to ${SECTION_PATH}`);
 }
 
 try {

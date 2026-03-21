@@ -88,7 +88,6 @@ jobs:
     environment: preview
     runs_on: linux-medium-nested-virtualization
     outputs:
-      build_id: ${{ steps.run_agent_qa.outputs.build_id }}
       status: ${{ steps.run_agent_qa.outputs.status }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
     env:
@@ -114,6 +113,7 @@ jobs:
         env:
           AGENT_DEVICE_SESSION: qa-android
           AGENT_DEVICE_PLATFORM: android
+          AGENT_DEVICE_SESSION_LOCK: strip
         run: |
           bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
 
@@ -124,7 +124,6 @@ jobs:
     environment: preview
     runs_on: macos-medium
     outputs:
-      build_id: ${{ steps.run_agent_qa.outputs.build_id }}
       status: ${{ steps.run_agent_qa.outputs.status }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
     env:
@@ -153,6 +152,7 @@ jobs:
         env:
           AGENT_DEVICE_SESSION: qa-ios
           AGENT_DEVICE_PLATFORM: ios
+          AGENT_DEVICE_SESSION_LOCK: strip
         run: |
           bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
 
@@ -176,8 +176,6 @@ jobs:
           ${{ after.qa_android.outputs.section_body || '### Android\n\n**Status:** blocked\n\nNo Android QA section was produced.\n' }}
 
           ${{ after.qa_ios.outputs.section_body || '### iOS\n\n**Status:** blocked\n\nNo iOS QA section was produced.\n' }}
-
-          Workflow: ${{ workflow.url }}
           EOF
 
           COMMENT_BODY="$(cat combined-comment.md)"

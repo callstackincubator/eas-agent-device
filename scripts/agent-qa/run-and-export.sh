@@ -36,5 +36,4 @@ fi
 
 set-output status "$STATUS"
 set-output section_body "$SECTION_BODY"
-set-output build_id "${BUILD_ID:-}"
 exit $EXIT_CODE

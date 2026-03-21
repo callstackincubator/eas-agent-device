@@ -30,7 +30,6 @@ This repo is a minimal Expo + CNG example for running AI-assisted Android and iO
 Optional environment variables for the QA job:
 
 - `AGENT_DEVICE_ANDROID_DEVICE`: Android AVD name to boot in CI
-- `AGENT_DEVICE_ANDROID_SERIAL`: Specific emulator/device serial to target
 - `AGENT_DEVICE_IOS_DEVICE`: iOS simulator name to boot in CI
 - `QA_MODEL`: Override the default model (`openai/gpt-5.4-mini`)
 - `BLOB_READ_WRITE_TOKEN`: Upload screenshots to Vercel Blob and include public links in the PR comment
@@ -42,7 +41,7 @@ npm install
 npx tsc --noEmit
 ```
 
-The workflow runner writes `comment.md`, `section.md`, `status.txt`, and `report.json` to `artifacts/qa/` during execution. Temporary screenshots are written outside the workspace and uploaded to Vercel Blob when configured.
+The workflow runner writes `section.md`, `status.txt`, and `report.json` to `artifacts/qa/` during execution. Temporary screenshots are written outside the workspace and uploaded to Vercel Blob when configured.
 
 To execute the runner directly with Node 24, provide the same environment variables the workflow sets:
 
