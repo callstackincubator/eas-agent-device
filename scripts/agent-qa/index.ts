@@ -441,7 +441,24 @@ function buildPrompt(skills: SkillMetadata[]): string {
     buildSkillsPrompt(skills),
     '',
     'You must infer concise acceptance criteria from the PR, test only the highest-signal Android flows, load the relevant local skill before relying on it, save screenshots into artifacts/qa/*.png, and call write_report exactly once before finishing.',
+    'Do not end with plain text. Your final action must be a write_report tool call.',
   ].join('\n');
+}
+
+function hasToolActivity(
+  steps: Array<{
+    toolCalls?: Array<{ toolName?: string }>;
+    toolResults?: Array<{ toolName?: string }>;
+  }>,
+  toolName: string,
+): boolean {
+  return steps.some((step) => {
+    const calledTool = step.toolCalls?.some((call) => call.toolName === toolName);
+    const completedTool = step.toolResults?.some(
+      (result) => result.toolName === toolName,
+    );
+    return Boolean(calledTool || completedTool);
+  });
 }
 
 async function main(): Promise<void> {
@@ -464,7 +481,22 @@ async function main(): Promise<void> {
       'Do not claim success without evidence from tool results.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
       'You must call write_report exactly once before you finish.',
+      'Never finish by returning plain text. Finish only by calling write_report.',
     ].join(' '),
+    toolChoice: 'required',
+    prepareStep: async ({ steps, stepNumber }) => {
+      const hasWrittenReport = hasToolActivity(steps, 'write_report');
+      const hasUsedDeviceTools = hasToolActivity(steps, 'agent_device');
+
+      if (hasWrittenReport || !hasUsedDeviceTools || stepNumber < 6) {
+        return undefined;
+      }
+
+      return {
+        activeTools: ['write_report'],
+        toolChoice: { type: 'tool', toolName: 'write_report' },
+      };
+    },
     tools: {
       get_pr_context: {
         description:
