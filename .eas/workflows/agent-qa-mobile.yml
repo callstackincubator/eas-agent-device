@@ -135,6 +135,7 @@ jobs:
       QA_PLATFORM: ios
       APPLICATION_ID: dev.expo.easagentdevice
       AGENT_DEVICE_IOS_DEVICE: iPhone 16
+      AGENT_DEVICE_IOS_DEVICE_CANDIDATES: iPhone 16,iPhone 16 Pro,iPhone 17,iPhone 17 Pro,iPhone 15,iPhone 15 Pro
       AGENT_DEVICE_DAEMON_TIMEOUT_MS: "180000"
       AGENT_DEVICE_IOS_BOOT_TIMEOUT_MS: "180000"
     steps:
