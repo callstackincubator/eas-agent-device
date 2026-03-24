@@ -182,20 +182,21 @@ jobs:
           IOS_TOP_ISSUE: ${{ after.qa_ios.outputs.top_issue || 'No iOS QA report was produced.' }}
           ANDROID_SECTION_BODY: ${{ after.qa_android.outputs.section_body || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android QA section was produced.\n' }}
           IOS_SECTION_BODY: ${{ after.qa_ios.outputs.section_body || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n' }}
+          ANDROID_SCREENSHOTS_JSON: ${{ after.qa_android.outputs.screenshots_json || '[]' }}
+          IOS_SCREENSHOTS_JSON: ${{ after.qa_ios.outputs.screenshots_json || '[]' }}
         run: |
-          cat > android-screenshots.json <<'EOF'
-          ${{ after.qa_android.outputs.screenshots_json || '[]' }}
-          EOF
-
-          cat > ios-screenshots.json <<'EOF'
-          ${{ after.qa_ios.outputs.screenshots_json || '[]' }}
-          EOF
+          printf '%s' "${ANDROID_SCREENSHOTS_JSON}" > android-screenshots.json
+          printf '%s' "${IOS_SCREENSHOTS_JSON}" > ios-screenshots.json
+          printf '%s' "${ANDROID_SECTION_BODY}" > android-section.md
+          printf '%s' "${IOS_SECTION_BODY}" > ios-section.md
 
           node --input-type=module <<'EOF' > combined-comment.md
           import fs from 'node:fs';
 
           const androidScreenshots = JSON.parse(fs.readFileSync('android-screenshots.json', 'utf8'));
           const iosScreenshots = JSON.parse(fs.readFileSync('ios-screenshots.json', 'utf8'));
+          const androidSection = fs.readFileSync('android-section.md', 'utf8');
+          const iosSection = fs.readFileSync('ios-section.md', 'utf8');
 
           const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
           const escapePipe = (value) => clean(value).replace(/\|/g, '\\|');
@@ -236,13 +237,13 @@ jobs:
             '<details>',
             '<summary>Full Android Report</summary>',
             '',
-            process.env.ANDROID_SECTION_BODY || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android QA section was produced.\n',
+            androidSection || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android QA section was produced.\n',
             '</details>',
             '',
             '<details>',
             '<summary>Full iOS Report</summary>',
             '',
-            process.env.IOS_SECTION_BODY || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n',
+            iosSection || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n',
             '</details>',
             '',
           ];
