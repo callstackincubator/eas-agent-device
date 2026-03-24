@@ -182,12 +182,20 @@ jobs:
           IOS_TOP_ISSUE: ${{ after.qa_ios.outputs.top_issue || 'No iOS QA report was produced.' }}
           ANDROID_SECTION_BODY: ${{ after.qa_android.outputs.section_body || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android QA section was produced.\n' }}
           IOS_SECTION_BODY: ${{ after.qa_ios.outputs.section_body || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n' }}
-          ANDROID_SCREENSHOTS_JSON: ${{ after.qa_android.outputs.screenshots_json || '[]' }}
-          IOS_SCREENSHOTS_JSON: ${{ after.qa_ios.outputs.screenshots_json || '[]' }}
         run: |
+          cat > android-screenshots.json <<'EOF'
+          ${{ after.qa_android.outputs.screenshots_json || '[]' }}
+          EOF
+
+          cat > ios-screenshots.json <<'EOF'
+          ${{ after.qa_ios.outputs.screenshots_json || '[]' }}
+          EOF
+
           node --input-type=module <<'EOF' > combined-comment.md
-          const androidScreenshots = JSON.parse(process.env.ANDROID_SCREENSHOTS_JSON || '[]');
-          const iosScreenshots = JSON.parse(process.env.IOS_SCREENSHOTS_JSON || '[]');
+          import fs from 'node:fs';
+
+          const androidScreenshots = JSON.parse(fs.readFileSync('android-screenshots.json', 'utf8'));
+          const iosScreenshots = JSON.parse(fs.readFileSync('ios-screenshots.json', 'utf8'));
 
           const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
           const escapePipe = (value) => clean(value).replace(/\|/g, '\\|');
