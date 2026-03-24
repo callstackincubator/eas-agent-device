@@ -90,6 +90,8 @@ jobs:
     outputs:
       status: ${{ steps.run_agent_qa.outputs.status }}
       status_label: ${{ steps.run_agent_qa.outputs.status_label }}
+      top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
+      screenshot_rows: ${{ steps.run_agent_qa.outputs.screenshot_rows }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
     env:
       BUILD_ID: ${{ after.android_repack.outputs.build_id || after.android_build.outputs.build_id }}
@@ -102,6 +104,9 @@ jobs:
     steps:
       - uses: eas/checkout
       - uses: eas/install_node_modules
+      - id: install_agent_device
+        run: |
+          npm install -g agent-device@0.10.1
       - uses: eas/download_build
         id: download_build
         with:
@@ -127,6 +132,8 @@ jobs:
     outputs:
       status: ${{ steps.run_agent_qa.outputs.status }}
       status_label: ${{ steps.run_agent_qa.outputs.status_label }}
+      top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
+      screenshot_rows: ${{ steps.run_agent_qa.outputs.screenshot_rows }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
     env:
       BUILD_ID: ${{ after.ios_repack.outputs.build_id || after.ios_build.outputs.build_id }}
@@ -141,6 +148,9 @@ jobs:
     steps:
       - uses: eas/checkout
       - uses: eas/install_node_modules
+      - id: install_agent_device
+        run: |
+          npm install -g agent-device@0.10.1
       - uses: eas/download_build
         id: download_build
         with:
@@ -169,14 +179,29 @@ jobs:
           cat > combined-comment.md <<'EOF'
           ## Agent QA
 
-          | Platform | Status |
+          | Platform | Status | Issues |
+          | --- | --- | --- |
+          | Android | ${{ after.qa_android.outputs.status_label || '⛔ blocked' }} | ${{ after.qa_android.outputs.top_issue || 'No Android QA report was produced.' }} |
+          | iOS | ${{ after.qa_ios.outputs.status_label || '⛔ blocked' }} | ${{ after.qa_ios.outputs.top_issue || 'No iOS QA report was produced.' }} |
+
+          ### Screenshots
+
+          | Platform | Preview |
           | --- | --- |
-          | Android | ${{ after.qa_android.outputs.status_label || '⛔ blocked' }} |
-          | iOS | ${{ after.qa_ios.outputs.status_label || '⛔ blocked' }} |
+          ${{ after.qa_android.outputs.screenshot_rows || '| Android | N/A |' }}
+          ${{ after.qa_ios.outputs.screenshot_rows || '| iOS | N/A |' }}
 
-          ${{ after.qa_android.outputs.section_body || '### Android\n\n**Status:** blocked\n\nNo Android QA section was produced.\n' }}
+          <details>
+          <summary>Full Android Report</summary>
 
-          ${{ after.qa_ios.outputs.section_body || '### iOS\n\n**Status:** blocked\n\nNo iOS QA section was produced.\n' }}
+          ${{ after.qa_android.outputs.section_body || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android QA section was produced.\n' }}
+          </details>
+
+          <details>
+          <summary>Full iOS Report</summary>
+
+          ${{ after.qa_ios.outputs.section_body || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n' }}
+          </details>
           EOF
 
           COMMENT_BODY="$(cat combined-comment.md)"

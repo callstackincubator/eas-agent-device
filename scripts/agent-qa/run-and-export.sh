@@ -24,22 +24,22 @@ export APP_PATH="${APP_PATH_ARG}"
 BOOTSTRAP_ERROR=""
 if [ "${QA_PLATFORM_VALUE}" = "android" ]; then
   BOOTSTRAP_STEP="install"
-  npx agent-device install "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
+  agent-device install "${APPLICATION_ID_VALUE}" "${APP_PATH}"
 else
   BOOTSTRAP_STEP="reinstall"
-  npx agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
+  agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}"
 fi
 BOOTSTRAP_EXIT=$?
 
 if [ "${BOOTSTRAP_EXIT}" -ne 0 ] && [ "${QA_PLATFORM_VALUE}" = "android" ]; then
   BOOTSTRAP_STEP="reinstall"
-  npx agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}" --platform "${QA_PLATFORM_VALUE}"
+  agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}"
   BOOTSTRAP_EXIT=$?
 fi
 
 if [ "${BOOTSTRAP_EXIT}" -eq 0 ]; then
   BOOTSTRAP_STEP="open"
-  npx agent-device open "${APPLICATION_ID_VALUE}" --platform "${QA_PLATFORM_VALUE}" --relaunch
+  agent-device open "${APPLICATION_ID_VALUE}" --relaunch
   BOOTSTRAP_EXIT=$?
 fi
 
@@ -84,7 +84,43 @@ No ${PLATFORM_LABEL} QA section was produced.
 "
 fi
 
+if [ -f artifacts/qa/report.json ]; then
+  TOP_ISSUE="$(
+    jq -r '
+      if .overallStatus == "passed" then
+        "N/A"
+      else
+        (.issues[0] // .summary // "N/A")
+      end
+    ' artifacts/qa/report.json | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//'
+  )"
+
+  SCREENSHOT_ROWS="$(
+    jq -r --arg platform "${PLATFORM_LABEL}" '
+      if (.screenshots | length) == 0 then
+        "| \($platform) | N/A |"
+      else
+        .screenshots[]
+        | if .blobUrl then
+            "| \($platform) | <a href=\"\(.blobUrl)\"><img src=\"\(.blobUrl)\" alt=\"\(.fileName)\" height=\"500\" /></a> |"
+          else
+            "| \($platform) | \(.fileName) (\(.bytes) bytes) |"
+          end
+      end
+    ' artifacts/qa/report.json
+  )"
+else
+  if [ "${STATUS}" = "passed" ]; then
+    TOP_ISSUE="N/A"
+  else
+    TOP_ISSUE="No report.json was produced."
+  fi
+  SCREENSHOT_ROWS="| ${PLATFORM_LABEL} | N/A |"
+fi
+
 set-output status "$STATUS"
 set-output status_label "$STATUS_LABEL"
+set-output top_issue "$TOP_ISSUE"
+set-output screenshot_rows "$SCREENSHOT_ROWS"
 set-output section_body "$SECTION_BODY"
 exit $EXIT_CODE

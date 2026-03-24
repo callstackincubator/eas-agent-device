@@ -91,7 +91,7 @@ const SCREENSHOTS_DIR = path.join(tmpdir(), 'agent-qa-screenshots');
 const REPORT_PATH = path.join(ARTIFACTS_DIR, 'report.json');
 const SECTION_PATH = path.join(ARTIFACTS_DIR, 'section.md');
 const STATUS_PATH = path.join(ARTIFACTS_DIR, 'status.txt');
-const AGENT_DEVICE_BIN = resolveAgentDeviceBinary();
+const AGENT_DEVICE_BIN = 'agent-device';
 const QA_PLATFORM = normalizePlatform(process.env.QA_PLATFORM);
 const APP_PATH = process.env.APP_PATH;
 const BOOTSTRAP_ERROR = process.env.AGENT_QA_BOOTSTRAP_ERROR;
@@ -125,14 +125,6 @@ const agentDeviceTrace: AgentDeviceTraceEntry[] = [];
 
 function normalizePlatform(value: string | undefined): QaPlatform {
   return value === 'ios' ? 'ios' : 'android';
-}
-
-function resolveAgentDeviceBinary(): string {
-  const local = path.join(ROOT_DIR, 'node_modules', '.bin', 'agent-device');
-  if (existsSync(local)) {
-    return local;
-  }
-  return 'agent-device';
 }
 
 function parseJson<T>(value: string | undefined, fallback: T): T {
@@ -583,14 +575,10 @@ function renderPlatformSection(report: Report): string {
   lines.push('', '### Metadata');
   lines.push(`- Build ID: \`${report.buildId || 'n/a'}\``);
   lines.push(`- Workflow: ${report.workflowUrl || 'n/a'}`);
-  lines.push('');
-  lines.push('<details>');
-  lines.push(`<summary>${report.platformLabel} full report</summary>`);
-  lines.push('');
+  lines.push('', '### JSON Report', '');
   lines.push('```json');
   lines.push(JSON.stringify(report, null, 2));
   lines.push('```');
-  lines.push('</details>');
 
   return `${lines.join('\n')}\n`;
 }

@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
-    "agent-device": "^0.8.6",
+    "agent-device": "^0.10.1",
     "ai": "^6.0.116",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
