@@ -95,32 +95,19 @@ if [ -f artifacts/qa/report.json ]; then
     ' artifacts/qa/report.json | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//'
   )"
 
-  SCREENSHOT_ROWS="$(
-    jq -r --arg platform "${PLATFORM_LABEL}" '
-      if (.screenshots | length) == 0 then
-        "| \($platform) | N/A |"
-      else
-        .screenshots[]
-        | if .blobUrl then
-            "| \($platform) | <a href=\"\(.blobUrl)\"><img src=\"\(.blobUrl)\" alt=\"\(.fileName)\" height=\"500\" /></a> |"
-          else
-            "| \($platform) | \(.fileName) (\(.bytes) bytes) |"
-          end
-      end
-    ' artifacts/qa/report.json
-  )"
+  SCREENSHOTS_JSON="$(jq -c '.screenshots // []' artifacts/qa/report.json)"
 else
   if [ "${STATUS}" = "passed" ]; then
     TOP_ISSUE="N/A"
   else
     TOP_ISSUE="No report.json was produced."
   fi
-  SCREENSHOT_ROWS="| ${PLATFORM_LABEL} | N/A |"
+  SCREENSHOTS_JSON="[]"
 fi
 
 set-output status "$STATUS"
 set-output status_label "$STATUS_LABEL"
 set-output top_issue "$TOP_ISSUE"
-set-output screenshot_rows "$SCREENSHOT_ROWS"
+set-output screenshots_json "$SCREENSHOTS_JSON"
 set-output section_body "$SECTION_BODY"
 exit $EXIT_CODE

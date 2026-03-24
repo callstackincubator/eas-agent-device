@@ -22,10 +22,16 @@ type ScreenshotInfo = {
   fileName: string;
   absolutePath: string;
   bytes: number;
+  label?: string;
   blobUrl?: string;
   blobDownloadUrl?: string;
   blobPathname?: string;
   uploadError?: string;
+};
+
+type ScreenshotLabel = {
+  fileName: string;
+  label: string;
 };
 
 type AgentDeviceTraceEntry = {
@@ -44,6 +50,7 @@ type ReportInput = {
   checked?: string[];
   issues?: string[];
   nextSteps?: string[];
+  screenshotLabels?: ScreenshotLabel[];
 };
 
 type Report = ReportInput & {
@@ -145,6 +152,15 @@ function trim(value: string, max = 6000): string {
   }
 
   return `${value.slice(0, max)}\n...<truncated>`;
+}
+
+function humanizeScreenshotLabel(fileName: string): string {
+  const stem = fileName.replace(/\.[^.]+$/, '');
+  const words = stem
+    .split(/[-_]+/g)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1));
+  return words.join(' ') || fileName;
 }
 
 function stripFrontmatter(content: string): string {
@@ -463,7 +479,22 @@ async function writeBlockedReport(error: Error): Promise<void> {
 async function persistReport(reportInput: ReportInput) {
   await ensureArtifactsDir();
   await ensureScreenshotsDir();
-  const screenshots = await uploadScreenshotsToBlob(await listScreenshots());
+  const screenshotLabelMap = new Map(
+    (reportInput.screenshotLabels || [])
+      .filter(
+        (item): item is ScreenshotLabel =>
+          Boolean(item?.fileName) && Boolean(item?.label),
+      )
+      .map((item) => [item.fileName, item.label.trim()]),
+  );
+  const screenshots = (await uploadScreenshotsToBlob(await listScreenshots())).map(
+    (screenshot) => ({
+      ...screenshot,
+      label:
+        screenshotLabelMap.get(screenshot.fileName) ||
+        humanizeScreenshotLabel(screenshot.fileName),
+    }),
+  );
   const report: Report = {
     generatedAt: new Date().toISOString(),
     model: MODEL_ID,
@@ -615,6 +646,7 @@ function buildPrompt(skills: SkillMetadata[]): string {
     '',
     platformSpecificFlow,
     `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, load the relevant local skill before relying on it, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
+    'Use short, descriptive screenshot file names and include matching screenshotLabels with brief route or state labels like Home, Explore, or Welcome screen.',
     'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
     'Do not end with plain text. Your final action must be a write_report tool call.',
   ].join('\n');
@@ -662,6 +694,7 @@ async function main(): Promise<void> {
       'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
       'Do not claim success without evidence from tool results.',
       'The workflow pre-binds the mobile target. Avoid explicit routing flags like --device, --udid, --serial, or --session in normal app commands unless you are inspecting device inventory.',
+      'When you save screenshots, use short descriptive file names and include matching screenshotLabels in write_report so the PR comment can label them clearly.',
       'If text-based automation evidence is inconclusive but screenshots likely show the relevant UI, report overallStatus as unsure.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
       'When you are done with the simulator or emulator session, prefer close --shutdown.',
@@ -842,6 +875,25 @@ async function main(): Promise<void> {
             nextSteps: {
               type: 'array',
               items: { type: 'string' },
+            },
+            screenshotLabels: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  fileName: {
+                    type: 'string',
+                    description: 'Saved screenshot file name, including .png.',
+                  },
+                  label: {
+                    type: 'string',
+                    description:
+                      'Very short route or state label for this screenshot, such as Home or Welcome screen.',
+                  },
+                },
+                required: ['fileName', 'label'],
+                additionalProperties: false,
+              },
             },
           },
           required: ['overallStatus', 'summary'],
