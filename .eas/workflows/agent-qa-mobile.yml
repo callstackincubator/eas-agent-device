@@ -91,7 +91,7 @@ jobs:
       status: ${{ steps.run_agent_qa.outputs.status }}
       status_label: ${{ steps.run_agent_qa.outputs.status_label }}
       top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
-      screenshots_json: ${{ steps.run_agent_qa.outputs.screenshots_json }}
+      screenshots_cell: ${{ steps.run_agent_qa.outputs.screenshots_cell }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
     env:
       BUILD_ID: ${{ after.android_repack.outputs.build_id || after.android_build.outputs.build_id }}
@@ -133,7 +133,7 @@ jobs:
       status: ${{ steps.run_agent_qa.outputs.status }}
       status_label: ${{ steps.run_agent_qa.outputs.status_label }}
       top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
-      screenshots_json: ${{ steps.run_agent_qa.outputs.screenshots_json }}
+      screenshots_cell: ${{ steps.run_agent_qa.outputs.screenshots_cell }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
     env:
       BUILD_ID: ${{ after.ios_repack.outputs.build_id || after.ios_build.outputs.build_id }}
@@ -167,98 +167,34 @@ jobs:
         run: |
           bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
 
-  combine_comment:
-    name: Combine mobile QA comment
-    after: [qa_android, qa_ios]
-    if: ${{ always() && github.event_name == 'pull_request' }}
-    outputs:
-      comment_body: ${{ steps.compose_comment.outputs.comment_body }}
-    steps:
-      - id: compose_comment
-        env:
-          ANDROID_STATUS_LABEL: ${{ after.qa_android.outputs.status_label || '⛔ blocked' }}
-          IOS_STATUS_LABEL: ${{ after.qa_ios.outputs.status_label || '⛔ blocked' }}
-          ANDROID_TOP_ISSUE: ${{ after.qa_android.outputs.top_issue || 'No Android QA report was produced.' }}
-          IOS_TOP_ISSUE: ${{ after.qa_ios.outputs.top_issue || 'No iOS QA report was produced.' }}
-          ANDROID_SECTION_BODY: ${{ after.qa_android.outputs.section_body || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android QA section was produced.\n' }}
-          IOS_SECTION_BODY: ${{ after.qa_ios.outputs.section_body || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n' }}
-          ANDROID_SCREENSHOTS_JSON: ${{ after.qa_android.outputs.screenshots_json || '[]' }}
-          IOS_SCREENSHOTS_JSON: ${{ after.qa_ios.outputs.screenshots_json || '[]' }}
-        run: |
-          printf '%s' "${ANDROID_SCREENSHOTS_JSON}" > android-screenshots.json
-          printf '%s' "${IOS_SCREENSHOTS_JSON}" > ios-screenshots.json
-          printf '%s' "${ANDROID_SECTION_BODY}" > android-section.md
-          printf '%s' "${IOS_SECTION_BODY}" > ios-section.md
-
-          node --input-type=module <<'EOF' > combined-comment.md
-          import fs from 'node:fs';
-
-          const androidScreenshots = JSON.parse(fs.readFileSync('android-screenshots.json', 'utf8'));
-          const iosScreenshots = JSON.parse(fs.readFileSync('ios-screenshots.json', 'utf8'));
-          const androidSection = fs.readFileSync('android-section.md', 'utf8');
-          const iosSection = fs.readFileSync('ios-section.md', 'utf8');
-
-          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-          const escapePipe = (value) => clean(value).replace(/\|/g, '\\|');
-          const renderCell = (screenshot) => {
-            if (!screenshot) {
-              return 'N/A';
-            }
-            const label = escapePipe(screenshot.label || screenshot.fileName || 'Screenshot');
-            if (screenshot.blobUrl) {
-              return `**${label}**<br><a href="${screenshot.blobUrl}"><img src="${screenshot.blobUrl}" alt="${label}" height="500" /></a>`;
-            }
-            const bytes = typeof screenshot.bytes === 'number' ? `${screenshot.bytes} bytes` : 'local file';
-            return `**${label}**<br>${escapePipe(screenshot.fileName || 'Screenshot')} (${bytes})`;
-          };
-
-          const screenshotRowCount = Math.max(androidScreenshots.length, iosScreenshots.length, 1);
-          const screenshotRows = [];
-          for (let index = 0; index < screenshotRowCount; index += 1) {
-            screenshotRows.push(
-              `| ${renderCell(androidScreenshots[index])} | ${renderCell(iosScreenshots[index])} |`,
-            );
-          }
-
-          const lines = [
-            '## Agent QA',
-            '',
-            '| Platform | Status | Issues |',
-            '| --- | --- | --- |',
-            `| Android | ${escapePipe(process.env.ANDROID_STATUS_LABEL)} | ${escapePipe(process.env.ANDROID_TOP_ISSUE)} |`,
-            `| iOS | ${escapePipe(process.env.IOS_STATUS_LABEL)} | ${escapePipe(process.env.IOS_TOP_ISSUE)} |`,
-            '',
-            '### Screenshots',
-            '',
-            '| Android | iOS |',
-            '| --- | --- |',
-            ...screenshotRows,
-            '',
-            '<details>',
-            '<summary>Full Android Report</summary>',
-            '',
-            androidSection || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android QA section was produced.\n',
-            '</details>',
-            '',
-            '<details>',
-            '<summary>Full iOS Report</summary>',
-            '',
-            iosSection || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n',
-            '</details>',
-            '',
-          ];
-
-          process.stdout.write(lines.join('\n'));
-          EOF
-
-          COMMENT_BODY="$(cat combined-comment.md)"
-          set-output comment_body "$COMMENT_BODY"
-
   qa_comment:
     name: Comment on PR
-    after: [combine_comment]
+    after: [qa_android, qa_ios]
     if: ${{ always() && github.event_name == 'pull_request' }}
     type: github-comment
     params:
       payload: |
-        ${{ after.combine_comment.outputs.comment_body || '## Agent QA' }}
+        ## Agent QA
+
+        | Platform | Status | Issues |
+        | --- | --- | --- |
+        | Android | ${{ after.qa_android.outputs.status_label || '⛔ blocked' }} | ${{ after.qa_android.outputs.top_issue || 'No Android QA report was produced.' }} |
+        | iOS | ${{ after.qa_ios.outputs.status_label || '⛔ blocked' }} | ${{ after.qa_ios.outputs.top_issue || 'No iOS QA report was produced.' }} |
+
+        ### Screenshots
+
+        | Android | iOS |
+        | --- | --- |
+        | ${{ after.qa_android.outputs.screenshots_cell || 'N/A' }} | ${{ after.qa_ios.outputs.screenshots_cell || 'N/A' }} |
+
+        <details>
+        <summary>Full Android Report</summary>
+
+        ${{ after.qa_android.outputs.section_body || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android QA section was produced.\n' }}
+        </details>
+
+        <details>
+        <summary>Full iOS Report</summary>
+
+        ${{ after.qa_ios.outputs.section_body || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n' }}
+        </details>
