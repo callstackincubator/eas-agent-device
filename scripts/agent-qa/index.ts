@@ -1,25 +1,48 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 
-import { ToolLoopAgent, gateway, jsonSchema, stepCountIs, tool } from 'ai';
+import { put } from '@vercel/blob';
+import { ToolLoopAgent, gateway, jsonSchema } from 'ai';
 
-type ChangedFiles = {
-  comparisonTarget: string;
-  files: string[];
-  statSummary: string;
+type SkillMetadata = {
+  name: string;
+  description: string;
+  directoryPath: string;
+  skillFilePath: string;
 };
+
+type QaPlatform = 'android' | 'ios';
 
 type ScreenshotInfo = {
   fileName: string;
   absolutePath: string;
   bytes: number;
+  label?: string;
+  blobUrl?: string;
+  blobDownloadUrl?: string;
+  blobPathname?: string;
+  uploadError?: string;
 };
 
-type ResultStatus = 'passed' | 'failed' | 'blocked' | 'not_tested';
+type ScreenshotLabel = {
+  fileName: string;
+  label: string;
+};
+
+type AgentDeviceTraceEntry = {
+  command: string;
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
+type ResultStatus = 'passed' | 'failed' | 'blocked' | 'not_tested' | 'unsure';
 
 type ReportInput = {
   overallStatus: ResultStatus;
@@ -27,16 +50,19 @@ type ReportInput = {
   checked?: string[];
   issues?: string[];
   nextSteps?: string[];
-  buildId?: string;
-  workflowUrl?: string;
+  screenshotLabels?: ScreenshotLabel[];
 };
 
 type Report = ReportInput & {
   generatedAt: string;
   model: string;
+  buildId: string;
+  workflowUrl: string;
+  platform: QaPlatform;
+  platformLabel: string;
   prNumber: number;
-  repository: string;
   screenshots: ScreenshotInfo[];
+  agentDeviceTrace: AgentDeviceTraceEntry[];
 };
 
 type ParsedPr = {
@@ -59,19 +85,6 @@ type CommandOptions = {
   allowFailure?: boolean;
 };
 
-type BootResult =
-  | {
-      attempted: false;
-      reason: string;
-    }
-  | {
-      attempted: true;
-      command: string;
-      ok: boolean;
-      stdout: string;
-      stderr: string;
-    };
-
 type ExecFileError = Error & {
   stdout?: string;
   stderr?: string;
@@ -81,43 +94,44 @@ type ExecFileError = Error & {
 const execFile = promisify(execFileCallback);
 const ROOT_DIR = process.cwd();
 const ARTIFACTS_DIR = path.join(ROOT_DIR, 'artifacts', 'qa');
-const COMMENT_PATH = path.join(ARTIFACTS_DIR, 'comment.md');
+const SCREENSHOTS_DIR = path.join(tmpdir(), 'agent-qa-screenshots');
 const REPORT_PATH = path.join(ARTIFACTS_DIR, 'report.json');
-const AGENT_DEVICE_BIN = resolveAgentDeviceBinary();
-const APK_PATH = process.env.APK_PATH;
-const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5.1-mini';
-const AGENT_DEVICE_SKILL_PATH = path.join(
-  ROOT_DIR,
-  'node_modules',
-  'agent-device',
-  'skills',
-  'agent-device',
-  'SKILL.md',
-);
+const SECTION_PATH = path.join(ARTIFACTS_DIR, 'section.md');
+const STATUS_PATH = path.join(ARTIFACTS_DIR, 'status.txt');
+const AGENT_DEVICE_BIN = 'agent-device';
+const QA_PLATFORM = normalizePlatform(process.env.QA_PLATFORM);
+const APP_PATH = process.env.APP_PATH;
+const BOOTSTRAP_ERROR = process.env.AGENT_QA_BOOTSTRAP_ERROR;
+const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
+const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5.4-mini';
+const EMPTY_INPUT_SCHEMA = jsonSchema({
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+});
+const SKILL_DIRECTORIES = [
+  path.join(ROOT_DIR, 'node_modules', 'agent-device', 'skills'),
+];
 
 const pr = parseJson<ParsedPr>(process.env.PR_JSON, {});
 const context = {
+  platform: QA_PLATFORM,
+  platformLabel: QA_PLATFORM === 'ios' ? 'iOS' : 'Android',
   buildId: process.env.BUILD_ID || '',
-  buildPath: APK_PATH || '',
-  baseRef: process.env.BASE_REF || '',
-  headSha: process.env.HEAD_SHA || '',
-  prNumber: Number(process.env.PR_NUMBER || pr.number || 0),
-  repository: process.env.GITHUB_REPOSITORY || '',
-  repositoryOwner: process.env.GITHUB_REPOSITORY_OWNER || '',
+  buildPath: APP_PATH || '',
+  prNumber: Number(pr.number || 0),
   workflowUrl: process.env.WORKFLOW_URL || '',
-  androidApplicationId: process.env.ANDROID_APPLICATION_ID || '',
-  emulatorDevice: process.env.AGENT_DEVICE_ANDROID_DEVICE || '',
-  androidSerial: process.env.AGENT_DEVICE_ANDROID_SERIAL || '',
+  applicationId: process.env.APPLICATION_ID || '',
+  deviceName:
+    process.env.DEVICE_NAME ||
+    (QA_PLATFORM === 'ios'
+      ? process.env.AGENT_DEVICE_IOS_DEVICE || ''
+      : process.env.AGENT_DEVICE_ANDROID_DEVICE || ''),
 };
+const agentDeviceTrace: AgentDeviceTraceEntry[] = [];
 
-let cachedChangedFiles: ChangedFiles | undefined;
-
-function resolveAgentDeviceBinary(): string {
-  const local = path.join(ROOT_DIR, 'node_modules', '.bin', 'agent-device');
-  if (existsSync(local)) {
-    return local;
-  }
-  return 'agent-device';
+function normalizePlatform(value: string | undefined): QaPlatform {
+  return value === 'ios' ? 'ios' : 'android';
 }
 
 function parseJson<T>(value: string | undefined, fallback: T): T {
@@ -140,14 +154,151 @@ function trim(value: string, max = 6000): string {
   return `${value.slice(0, max)}\n...<truncated>`;
 }
 
+function humanizeScreenshotLabel(fileName: string): string {
+  const stem = fileName.replace(/\.[^.]+$/, '');
+  const words = stem
+    .split(/[-_]+/g)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1));
+  return words.join(' ') || fileName;
+}
+
+function stripFrontmatter(content: string): string {
+  const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return match ? content.slice(match[0].length).trim() : content.trim();
+}
+
+function parseFrontmatter(content: string): {
+  name: string;
+  description: string;
+} {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match?.[1]) {
+    throw new Error('No frontmatter found');
+  }
+
+  const frontmatter = match[1];
+  const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
+  const descriptionMatch = frontmatter.match(/^description:\s*(.+)$/m);
+  const name = nameMatch?.[1]?.trim().replace(/^['"]|['"]$/g, '');
+  const description = descriptionMatch?.[1]
+    ?.trim()
+    .replace(/^['"]|['"]$/g, '');
+
+  if (!name || !description) {
+    throw new Error('Skill frontmatter is missing name or description');
+  }
+
+  return { name, description };
+}
+
+async function discoverSkills(directories: string[]): Promise<SkillMetadata[]> {
+  const skills: SkillMetadata[] = [];
+  const seenNames = new Set<string>();
+
+  for (const directory of directories) {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      const skillDirectoryPath = path.join(directory, entry.name);
+      const skillFilePath = path.join(skillDirectoryPath, 'SKILL.md');
+
+      try {
+        const content = await readFile(skillFilePath, 'utf8');
+        const frontmatter = parseFrontmatter(content);
+
+        if (seenNames.has(frontmatter.name.toLowerCase())) {
+          continue;
+        }
+
+        seenNames.add(frontmatter.name.toLowerCase());
+        skills.push({
+          name: frontmatter.name,
+          description: frontmatter.description,
+          directoryPath: skillDirectoryPath,
+          skillFilePath,
+        });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return skills.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function buildSkillsPrompt(skills: SkillMetadata[]): string {
+  if (skills.length === 0) {
+    return 'No local skills were discovered for this run.';
+  }
+
+  const skillList = skills
+    .map((skill) => `- ${skill.name}: ${skill.description}`)
+    .join('\n');
+
+  return [
+    'Available local skills:',
+    skillList,
+    '',
+    'Load a skill before relying on its instructions. Use read_skill_file only for files inside the loaded skill directory.',
+  ].join('\n');
+}
+
+function findSkill(skills: SkillMetadata[], name: string): SkillMetadata {
+  const skill = skills.find(
+    (candidate) => candidate.name.toLowerCase() === name.toLowerCase(),
+  );
+
+  if (!skill) {
+    throw new Error(`Skill not found: ${name}`);
+  }
+
+  return skill;
+}
+
+function resolveSkillFilePath(skill: SkillMetadata, relativeFilePath: string): string {
+  const absolutePath = path.resolve(skill.directoryPath, relativeFilePath);
+  const relativePath = path.relative(skill.directoryPath, absolutePath);
+  const normalizedRelativePath = relativePath.split(path.sep).join('/');
+
+  if (
+    normalizedRelativePath === '' ||
+    normalizedRelativePath.startsWith('../') ||
+    normalizedRelativePath === '..'
+  ) {
+    throw new Error(
+      `Refusing to read a path outside the skill directory: ${relativeFilePath}`,
+    );
+  }
+
+  return absolutePath;
+}
+
 function ensureRequiredAgentQaEnvs(): void {
   if (!process.env.AI_GATEWAY_API_KEY) {
     throw new Error(
       'Missing required environment variable: AI_GATEWAY_API_KEY',
     );
   }
-  if (!process.env.APK_PATH) {
-    throw new Error('Missing required environment variable: APK_PATH');
+  if (!APP_PATH) {
+    throw new Error('Missing required environment variable: APP_PATH');
+  }
+  if (!context.applicationId) {
+    throw new Error('Missing required environment variable: APPLICATION_ID');
+  }
+  if (context.platform === 'ios' && !context.deviceName) {
+    throw new Error(
+      'Missing required environment variable: AGENT_DEVICE_IOS_DEVICE',
+    );
   }
 }
 
@@ -195,149 +346,55 @@ async function runCommand(
   }
 }
 
+async function runAgentDeviceCommand(command: string, args: string[] = []): Promise<{
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  json: unknown;
+}> {
+  const result = await runCommand(AGENT_DEVICE_BIN, [command, ...args], {
+    allowFailure: true,
+  });
+
+  agentDeviceTrace.push({
+    command: [command, ...args].join(' '),
+    ok: result.ok,
+    exitCode: result.exitCode,
+    stdout: trim(result.stdout, 4000),
+    stderr: trim(result.stderr, 2000),
+  });
+
+  return {
+    ok: result.ok,
+    exitCode: result.exitCode,
+    stdout: trim(result.stdout, 8000),
+    stderr: trim(result.stderr, 4000),
+    json: parseJson(result.stdout, null as unknown),
+  };
+}
+
 async function ensureArtifactsDir(): Promise<void> {
   await mkdir(ARTIFACTS_DIR, { recursive: true });
 }
 
-async function ensureBaseRefFetched(): Promise<void> {
-  if (!context.baseRef) {
-    return;
-  }
-
-  await runCommand(
-    'git',
-    [
-      'fetch',
-      'origin',
-      `refs/heads/${context.baseRef}:refs/remotes/origin/${context.baseRef}`,
-      '--depth=50',
-    ],
-    {
-      allowFailure: true,
-    },
-  );
-}
-
-async function getChangedFiles(): Promise<ChangedFiles> {
-  if (cachedChangedFiles) {
-    return cachedChangedFiles;
-  }
-
-  await ensureBaseRefFetched();
-  const comparisonTarget = context.baseRef
-    ? `origin/${context.baseRef}...${context.headSha || 'HEAD'}`
-    : 'HEAD~1...HEAD';
-
-  const [names, statSummary] = await Promise.all([
-    runCommand('git', ['diff', '--name-only', comparisonTarget]),
-    runCommand('git', ['diff', '--stat', comparisonTarget]),
-  ]);
-
-  cachedChangedFiles = {
-    comparisonTarget,
-    files: names.stdout
-      .split('\n')
-      .map((file) => file.trim())
-      .filter(Boolean),
-    statSummary: trim(statSummary.stdout || statSummary.stderr, 4000),
-  };
-
-  return cachedChangedFiles;
-}
-
-function assertWithinRoot(absolutePath: string): string {
-  const relativePath = path.relative(ROOT_DIR, absolutePath);
-  const normalizedRelativePath = relativePath.split(path.sep).join('/');
-
-  if (
-    normalizedRelativePath === '' ||
-    normalizedRelativePath.startsWith('../') ||
-    normalizedRelativePath === '..'
-  ) {
-    throw new Error(
-      `Refusing to read a path outside the repository root: ${absolutePath}`,
-    );
-  }
-
-  return normalizedRelativePath;
-}
-
-async function readFileExcerpt(
-  filePath: string,
-  startLine = 1,
-  maxLines = 200,
-) {
-  const absolutePath = path.resolve(ROOT_DIR, filePath);
-  const relativePath = assertWithinRoot(absolutePath);
-  const changedFiles = await getChangedFiles();
-
-  if (!changedFiles.files.includes(relativePath)) {
-    throw new Error(
-      `Refusing to read ${relativePath}. The read_file_excerpt tool is limited to files changed in this pull request.`,
-    );
-  }
-
-  const content = await readFile(absolutePath, 'utf8');
-  const lines = content.split('\n');
-  const slice = lines.slice(
-    Math.max(startLine - 1, 0),
-    Math.max(startLine - 1, 0) + maxLines,
-  );
-
-  return {
-    absolutePath,
-    relativePath,
-    startLine,
-    endLine: startLine + slice.length - 1,
-    content: slice.join('\n'),
-  };
-}
-
-async function maybeBootAndroidEmulator(): Promise<BootResult> {
-  if (!context.emulatorDevice) {
-    return {
-      attempted: false,
-      reason: 'AGENT_DEVICE_ANDROID_DEVICE was not set.',
-    };
-  }
-
-  const args = [
-    'boot',
-    '--platform',
-    'android',
-    '--device',
-    context.emulatorDevice,
-    '--headless',
-  ];
-  if (context.androidSerial) {
-    args.push('--serial', context.androidSerial);
-  }
-
-  const result = await runCommand(AGENT_DEVICE_BIN, args, {
-    allowFailure: true,
-  });
-  return {
-    attempted: true,
-    command: [AGENT_DEVICE_BIN, ...args].join(' '),
-    ok: result.ok,
-    stdout: trim(result.stdout, 3000),
-    stderr: trim(result.stderr, 3000),
-  };
+async function ensureScreenshotsDir(): Promise<void> {
+  await mkdir(SCREENSHOTS_DIR, { recursive: true });
 }
 
 async function listScreenshots(): Promise<ScreenshotInfo[]> {
-  if (!existsSync(ARTIFACTS_DIR)) {
+  if (!existsSync(SCREENSHOTS_DIR)) {
     return [];
   }
 
-  const entries = await readdir(ARTIFACTS_DIR);
+  const entries = await readdir(SCREENSHOTS_DIR);
   const screenshots: ScreenshotInfo[] = [];
   for (const entry of entries) {
     if (!entry.endsWith('.png')) {
       continue;
     }
 
-    const absolutePath = path.join(ARTIFACTS_DIR, entry);
+    const absolutePath = path.join(SCREENSHOTS_DIR, entry);
     const fileStat = await stat(absolutePath);
     screenshots.push({
       fileName: entry,
@@ -351,18 +408,69 @@ async function listScreenshots(): Promise<ScreenshotInfo[]> {
   );
 }
 
+async function uploadScreenshotsToBlob(
+  screenshots: ScreenshotInfo[],
+): Promise<ScreenshotInfo[]> {
+  if (!BLOB_READ_WRITE_TOKEN || screenshots.length === 0) {
+    return screenshots;
+  }
+
+  return Promise.all(
+    screenshots.map(async (screenshot) => {
+      try {
+        const fileBuffer = await readFile(screenshot.absolutePath);
+        const pathnameParts = [
+          'agent-qa',
+          context.platform,
+          context.prNumber ? `pr-${context.prNumber}` : 'pr-unknown',
+          context.buildId || 'local-build',
+          screenshot.fileName,
+        ];
+        const pathname = pathnameParts.join('/');
+        const blob = await put(pathname, fileBuffer, {
+          access: 'public',
+          addRandomSuffix: true,
+          contentType: 'image/png',
+          token: BLOB_READ_WRITE_TOKEN,
+        });
+
+        return {
+          ...screenshot,
+          blobUrl: blob.url,
+          blobDownloadUrl: blob.downloadUrl,
+          blobPathname: blob.pathname,
+        };
+      } catch (unknownError) {
+        const error =
+          unknownError instanceof Error
+            ? unknownError
+            : new Error(String(unknownError));
+
+        console.error(
+          `Failed to upload screenshot ${screenshot.fileName} to Vercel Blob: ${error.message}`,
+        );
+
+        return {
+          ...screenshot,
+          uploadError: error.message,
+        };
+      }
+    }),
+  );
+}
+
 async function writeBlockedReport(error: Error): Promise<void> {
   const summary: ReportInput = {
     overallStatus: 'blocked',
     summary: error.message,
-    checked: ['Attempted to run Android QA agent on PR changes'],
+    checked: [
+      `Attempted to run ${context.platformLabel} QA agent on PR changes`,
+    ],
     issues: [error.message],
     nextSteps: [
       'Check the workflow logs for command failures.',
-      'Verify AI_GATEWAY_API_KEY, Android build availability, and emulator configuration.',
+      `Verify AI_GATEWAY_API_KEY, ${context.platformLabel} build availability, and ${context.platform === 'ios' ? 'simulator' : 'emulator'} configuration.`,
     ],
-    buildId: context.buildId,
-    workflowUrl: context.workflowUrl,
   };
 
   await persistReport(summary);
@@ -370,33 +478,96 @@ async function writeBlockedReport(error: Error): Promise<void> {
 
 async function persistReport(reportInput: ReportInput) {
   await ensureArtifactsDir();
-  const screenshots = await listScreenshots();
+  await ensureScreenshotsDir();
+  const screenshotLabelMap = new Map(
+    (reportInput.screenshotLabels || [])
+      .filter(
+        (item): item is ScreenshotLabel =>
+          Boolean(item?.fileName) && Boolean(item?.label),
+      )
+      .map((item) => [item.fileName, item.label.trim()]),
+  );
+  const screenshots = (await uploadScreenshotsToBlob(await listScreenshots())).map(
+    (screenshot) => ({
+      ...screenshot,
+      label:
+        screenshotLabelMap.get(screenshot.fileName) ||
+        humanizeScreenshotLabel(screenshot.fileName),
+    }),
+  );
   const report: Report = {
     generatedAt: new Date().toISOString(),
     model: MODEL_ID,
     buildId: context.buildId,
     workflowUrl: context.workflowUrl,
+    platform: context.platform,
+    platformLabel: context.platformLabel,
     prNumber: context.prNumber,
-    repository: context.repository,
     screenshots,
+    agentDeviceTrace: agentDeviceTrace.slice(-20),
     ...reportInput,
   };
 
   await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  await writeFile(COMMENT_PATH, trim(renderComment(report), 12000), 'utf8');
-
-  return {
-    reportPath: REPORT_PATH,
-    commentPath: COMMENT_PATH,
-    screenshotCount: screenshots.length,
-  };
+  await writeFile(SECTION_PATH, trim(renderPlatformSection(report), 16000), 'utf8');
+  await writeFile(STATUS_PATH, `${report.overallStatus}\n`, 'utf8');
 }
 
-function renderComment(report: Report): string {
+function renderScreenshotRows(
+  screenshots: ScreenshotInfo[],
+  platformLabel: string,
+): string[] {
+  if (screenshots.length === 0) {
+    return ['- No screenshots were saved.'];
+  }
+
+  const screenshotRows = screenshots.map((screenshot) => {
+    if (screenshot.blobUrl) {
+      return `| <a href="${screenshot.blobUrl}"><img src="${screenshot.blobUrl}" alt="${screenshot.fileName}" height="500" /></a> |`;
+    }
+
+    const details = [screenshot.fileName, `${screenshot.bytes} bytes`];
+    if (screenshot.uploadError) {
+      details.push(`upload failed: ${screenshot.uploadError}`);
+    }
+
+    return details.join(', ');
+  });
+
+  if (screenshots.some((screenshot) => screenshot.blobUrl)) {
+    return [
+      `| ${platformLabel} |`,
+      '| --- |',
+      ...screenshotRows.filter((row) => row.startsWith('|')),
+    ];
+  }
+
+  return screenshotRows
+    .filter((value) => !value.startsWith('|'))
+    .map((row) => `- ${row}`);
+}
+
+function getStatusEmoji(status: ResultStatus): string {
+  switch (status) {
+    case 'passed':
+      return '✅';
+    case 'failed':
+      return '❌';
+    case 'blocked':
+      return '⛔';
+    case 'unsure':
+      return '🤔';
+    case 'not_tested':
+    default:
+      return '⚪';
+  }
+}
+
+function renderPlatformSection(report: Report): string {
   const lines = [
-    '## Agent QA',
+    `### ${report.platformLabel}`,
     '',
-    `**Overall status:** ${report.overallStatus}`,
+    `**Status:** ${getStatusEmoji(report.overallStatus)} ${report.overallStatus}`,
     '',
     report.summary || 'No summary was provided.',
     '',
@@ -421,13 +592,7 @@ function renderComment(report: Report): string {
   }
 
   lines.push('', '### Screenshots');
-  if (report.screenshots?.length) {
-    for (const screenshot of report.screenshots) {
-      lines.push(`- ${screenshot.fileName} (${screenshot.bytes} bytes)`);
-    }
-  } else {
-    lines.push('- No screenshots were saved.');
-  }
+  lines.push(...renderScreenshotRows(report.screenshots || [], report.platformLabel));
 
   lines.push('', '### Next steps');
   if (report.nextSteps?.length) {
@@ -441,16 +606,28 @@ function renderComment(report: Report): string {
   lines.push('', '### Metadata');
   lines.push(`- Build ID: \`${report.buildId || 'n/a'}\``);
   lines.push(`- Workflow: ${report.workflowUrl || 'n/a'}`);
+  lines.push('', '### JSON Report', '');
+  lines.push('```json');
+  lines.push(JSON.stringify(report, null, 2));
+  lines.push('```');
 
   return `${lines.join('\n')}\n`;
 }
 
-function buildPrompt(): string {
+function buildPrompt(skills: SkillMetadata[]): string {
   const prTitle = pr.title || 'Untitled PR';
   const prBody = pr.body || 'No PR body was provided.';
+  const platformSpecificContext =
+    context.platform === 'ios'
+      ? [`- Preferred iOS simulator: ${context.deviceName || 'n/a'}`]
+      : [`- Preferred Android device: ${context.deviceName || 'n/a'}`];
+  const platformSpecificFlow =
+    context.platform === 'ios'
+      ? `For iOS simulator runs, the workflow already booted the app on ${context.deviceName}. Do not pass --device, --udid, or --session in normal app commands.`
+      : `For Android runs, the workflow already booted the app on ${context.deviceName || 'the booted emulator'}.`;
 
   return [
-    'Review this pull request and run a lightweight Android QA pass.',
+    `Review this pull request and run a lightweight ${context.platformLabel} QA pass.`,
     '',
     `PR #${context.prNumber}: ${prTitle}`,
     '',
@@ -459,52 +636,93 @@ function buildPrompt(): string {
     'Execution context:',
     `- Build ID: ${context.buildId || 'n/a'}`,
     `- Build path: ${context.buildPath || 'n/a'}`,
-    `- Android application id: ${context.androidApplicationId || 'n/a'}`,
-    `- Preferred emulator device: ${context.emulatorDevice || 'n/a'}`,
-    `- Preferred Android serial: ${context.androidSerial || 'n/a'}`,
+    `- Platform: ${context.platformLabel}`,
+    `- Application id: ${context.applicationId || 'n/a'}`,
+    ...platformSpecificContext,
     `- Workflow URL: ${context.workflowUrl || 'n/a'}`,
-    `- agent-device skill: ${AGENT_DEVICE_SKILL_PATH}`,
+    `- Temporary screenshot directory: ${SCREENSHOTS_DIR}`,
     '',
-    'You must infer concise acceptance criteria from the PR, test only the highest-signal Android flows, consult the packaged agent-device skill before operating unfamiliar commands, save screenshots into artifacts/qa/*.png, and call write_report exactly once before finishing.',
+    buildSkillsPrompt(skills),
+    '',
+    platformSpecificFlow,
+    `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, load the relevant local skill before relying on it, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
+    'When you need to verify that text is actually visible on screen, prefer plain snapshot over snapshot -i. Use snapshot -i mainly for exploration and choosing refs.',
+    'Use short, descriptive screenshot file names and include matching screenshotLabels with brief route or state labels like Home, Explore, or Welcome screen.',
+    'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
+    'Do not end with plain text. Your final action must be a write_report tool call.',
   ].join('\n');
+}
+
+function hasToolActivity(
+  steps: Array<{
+    toolCalls?: Array<{ toolName?: string }>;
+    toolResults?: Array<{ toolName?: string }>;
+  }>,
+  toolName: string,
+): boolean {
+  return steps.some((step) => {
+    const calledTool = step.toolCalls?.some((call) => call.toolName === toolName);
+    const completedTool = step.toolResults?.some(
+      (result) => result.toolName === toolName,
+    );
+    return Boolean(calledTool || completedTool);
+  });
 }
 
 async function main(): Promise<void> {
   await ensureArtifactsDir();
+  await ensureScreenshotsDir();
   ensureRequiredAgentQaEnvs();
-
-  const emulatorBoot = await maybeBootAndroidEmulator();
-  if (emulatorBoot.attempted) {
-    console.log('Android emulator boot attempt:', emulatorBoot);
+  if (BOOTSTRAP_ERROR) {
+    await writeBlockedReport(new Error(BOOTSTRAP_ERROR));
+    return;
   }
+  const skills = await discoverSkills(SKILL_DIRECTORIES);
 
   const agent = new ToolLoopAgent({
     model: gateway(MODEL_ID),
-    stopWhen: stepCountIs(20),
     instructions: [
-      'You are an Android QA agent running inside EAS Workflows.',
-      'First inspect the PR context and changed files.',
-      'Infer a short list of acceptance criteria focused on user-visible behavior.',
-      'Use agent-device to test the Android APK at the provided build path.',
-      'The installed agent-device package includes a skill file at node_modules/agent-device/skills/agent-device/SKILL.md. Read that skill before making non-trivial command choices.',
-      'For installation, prefer: reinstall QAApp <build_path> --platform android, then open <application_id> --platform android --session qa-android --relaunch.',
-      'Take screenshots for meaningful states and save them in artifacts/qa with .png filenames.',
+      `You are a ${context.platformLabel} QA agent running inside EAS Workflows.`,
+      'Treat the app and repository as a black box.',
+      'Infer a short list of acceptance criteria from PR metadata, focusing on user-visible behavior.',
+      'The workflow has already installed and launched the app before the agent starts.',
+      'Use the local skills list in the prompt. Load a relevant skill before making non-trivial command choices.',
+      context.platform === 'ios'
+        ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Do not pass --device, --udid, --serial, or --session in normal app commands.`
+        : 'For Android runs, the workflow already booted and bound the emulator.',
+      'When verifying whether text is visible on screen, prefer plain snapshot. Use snapshot -i mainly for interactive exploration and choosing refs.',
+      `Take screenshots for meaningful states and save them temporarily in ${SCREENSHOTS_DIR} with .png filenames.`,
       'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
+      'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
       'Do not claim success without evidence from tool results.',
+      'The workflow pre-binds the mobile target. Avoid explicit routing flags like --device, --udid, --serial, or --session in normal app commands unless you are inspecting device inventory.',
+      'When you save screenshots, use short descriptive file names and include matching screenshotLabels in write_report so the PR comment can label them clearly.',
+      'If text-based automation evidence is inconclusive but screenshots likely show the relevant UI, report overallStatus as unsure.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
+      'When you are done with the simulator or emulator session, prefer close --shutdown.',
       'You must call write_report exactly once before you finish.',
+      'Never finish by returning plain text. Finish only by calling write_report.',
     ].join(' '),
+    toolChoice: 'required',
+    prepareStep: async ({ steps, stepNumber }) => {
+      const hasWrittenReport = hasToolActivity(steps, 'write_report');
+      const hasUsedDeviceTools = hasToolActivity(steps, 'agent_device');
+
+      if (hasWrittenReport || !hasUsedDeviceTools || stepNumber < 6) {
+        return undefined;
+      }
+
+      return {
+        activeTools: ['write_report'],
+        toolChoice: { type: 'tool', toolName: 'write_report' },
+      };
+    },
     tools: {
-      get_pr_context: tool({
+      get_pr_context: {
         description:
           'Read the GitHub pull request context and workflow metadata for this QA run.',
-        inputSchema: jsonSchema({
-          type: 'object',
-          properties: {},
-          additionalProperties: false,
-        }),
+        inputSchema: EMPTY_INPUT_SCHEMA,
         execute: async () => ({
-          repository: context.repository,
           prNumber: context.prNumber,
           title: pr.title || '',
           body: pr.body || '',
@@ -515,30 +733,52 @@ async function main(): Promise<void> {
           buildId: context.buildId,
           buildPath: context.buildPath,
           workflowUrl: context.workflowUrl,
-          androidApplicationId: context.androidApplicationId,
-          emulatorDevice: context.emulatorDevice,
-          androidSerial: context.androidSerial,
+          platform: context.platform,
+          platformLabel: context.platformLabel,
+          applicationId: context.applicationId,
+          deviceName: context.deviceName,
         }),
-      }),
-      get_changed_files: tool({
+      },
+      load_skill: {
         description:
-          'List changed files for the PR and a compact git diff stat summary.',
-        inputSchema: jsonSchema({
-          type: 'object',
-          properties: {},
-          additionalProperties: false,
-        }),
-        execute: async () => getChangedFiles(),
-      }),
-      read_file_excerpt: tool({
-        description:
-          'Read a file from the repository with line numbers for changed-file inspection.',
+          'Load a local skill and return its instructions plus the skill directory path.',
         inputSchema: jsonSchema({
           type: 'object',
           properties: {
+            name: {
+              type: 'string',
+              description: 'Skill name from the available local skills list.',
+            },
+          },
+          required: ['name'],
+          additionalProperties: false,
+        }),
+        execute: async ({ name }: { name: string }) => {
+          const skill = findSkill(skills, name);
+          const content = await readFile(skill.skillFilePath, 'utf8');
+          return {
+            name: skill.name,
+            description: skill.description,
+            skillDirectory: skill.directoryPath,
+            skillFilePath: skill.skillFilePath,
+            content: stripFrontmatter(content),
+          };
+        },
+      },
+      read_skill_file: {
+        description:
+          'Read a text file inside a loaded skill directory, such as references or scripts.',
+        inputSchema: jsonSchema({
+          type: 'object',
+          properties: {
+            skillName: {
+              type: 'string',
+              description: 'Skill name from the available local skills list.',
+            },
             path: {
               type: 'string',
-              description: 'Repository-relative file path to read.',
+              description:
+                'Path relative to the skill directory, such as references/foo.md.',
             },
             startLine: {
               type: 'integer',
@@ -552,47 +792,22 @@ async function main(): Promise<void> {
               description: 'Maximum number of lines to read.',
             },
           },
-          required: ['path'],
+          required: ['skillName', 'path'],
           additionalProperties: false,
         }),
         execute: async ({
-          path: filePath,
+          skillName,
+          path: relativeFilePath,
           startLine = 1,
           maxLines = 200,
         }: {
+          skillName: string;
           path: string;
           startLine?: number;
           maxLines?: number;
-        }) => readFileExcerpt(filePath, startLine, maxLines),
-      }),
-      read_agent_device_skill: tool({
-        description:
-          'Read the packaged agent-device skill file that ships with node_modules/agent-device.',
-        inputSchema: jsonSchema({
-          type: 'object',
-          properties: {
-            startLine: {
-              type: 'integer',
-              minimum: 1,
-              description: '1-based line number to start reading from.',
-            },
-            maxLines: {
-              type: 'integer',
-              minimum: 1,
-              maximum: 400,
-              description: 'Maximum number of lines to read.',
-            },
-          },
-          additionalProperties: false,
-        }),
-        execute: async ({
-          startLine = 1,
-          maxLines = 200,
-        }: {
-          startLine?: number;
-          maxLines?: number;
         }) => {
-          const absolutePath = AGENT_DEVICE_SKILL_PATH;
+          const skill = findSkill(skills, skillName);
+          const absolutePath = resolveSkillFilePath(skill, relativeFilePath);
           const content = await readFile(absolutePath, 'utf8');
           const lines = content.split('\n');
           const slice = lines.slice(
@@ -601,16 +816,17 @@ async function main(): Promise<void> {
           );
 
           return {
+            skillName: skill.name,
             absolutePath,
             startLine,
             endLine: startLine + slice.length - 1,
             content: slice.join('\n'),
           };
         },
-      }),
-      agent_device: tool({
+      },
+      agent_device: {
         description:
-          'Run an agent-device command for Android UI automation and screenshot capture.',
+          'Run an agent-device command for mobile UI automation and screenshot capture.',
         inputSchema: jsonSchema({
           type: 'object',
           properties: {
@@ -623,7 +839,7 @@ async function main(): Promise<void> {
               type: 'array',
               items: { type: 'string' },
               description:
-                'Remaining CLI arguments. Use artifacts/qa/*.png for screenshots.',
+                `Remaining CLI arguments. Use ${SCREENSHOTS_DIR}/*.png for screenshots.`,
             },
           },
           required: ['command'],
@@ -635,22 +851,9 @@ async function main(): Promise<void> {
         }: {
           command: string;
           args?: string[];
-        }) => {
-          const result = await runCommand(
-            AGENT_DEVICE_BIN,
-            [command, ...args],
-            { allowFailure: true },
-          );
-          return {
-            ok: result.ok,
-            exitCode: result.exitCode,
-            stdout: trim(result.stdout, 8000),
-            stderr: trim(result.stderr, 4000),
-            json: parseJson(result.stdout, null as unknown),
-          };
-        },
-      }),
-      write_report: tool({
+        }) => runAgentDeviceCommand(command, args),
+      },
+      write_report: {
         description:
           'Persist the final QA summary, findings, and screenshot index to artifacts/qa.',
         inputSchema: jsonSchema({
@@ -658,7 +861,7 @@ async function main(): Promise<void> {
           properties: {
             overallStatus: {
               type: 'string',
-              enum: ['passed', 'failed', 'blocked', 'not_tested'],
+              enum: ['passed', 'failed', 'blocked', 'not_tested', 'unsure'],
             },
             summary: {
               type: 'string',
@@ -675,33 +878,59 @@ async function main(): Promise<void> {
               type: 'array',
               items: { type: 'string' },
             },
+            screenshotLabels: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  fileName: {
+                    type: 'string',
+                    description: 'Saved screenshot file name, including .png.',
+                  },
+                  label: {
+                    type: 'string',
+                    description:
+                      'Very short route or state label for this screenshot, such as Home or Welcome screen.',
+                  },
+                },
+                required: ['fileName', 'label'],
+                additionalProperties: false,
+              },
+            },
           },
           required: ['overallStatus', 'summary'],
           additionalProperties: false,
         }),
         execute: async (input: ReportInput) => persistReport(input),
-      }),
+      },
     },
   });
 
   const result = await agent.generate({
-    prompt: buildPrompt(),
+    prompt: buildPrompt(skills),
   });
 
-  console.log(trim(result.text || 'Agent completed without final text.', 4000));
+  if (result.text) {
+    console.log(trim(`Agent finished with final text:\n${result.text}`, 4000));
+  }
 
-  if (!existsSync(COMMENT_PATH)) {
+  if (!existsSync(SECTION_PATH)) {
     await persistReport({
       overallStatus: 'blocked',
-      summary: 'The agent completed without calling write_report.',
-      checked: ['Produce a QA report'],
+      summary: result.text || 'The agent completed without calling write_report.',
+      checked: [`Produce a ${context.platformLabel} QA report`],
       issues: ['The write_report tool was not called by the agent.'],
       nextSteps: [
         'Inspect the workflow logs and tighten the agent instructions.',
       ],
     });
-    throw new Error('The QA agent did not write a report.');
+    console.log(
+      `Fallback QA report written to ${SECTION_PATH} because write_report was not called.`,
+    );
+    return;
   }
+
+  console.log(`QA report written to ${SECTION_PATH}`);
 }
 
 try {

@@ -15,6 +15,12 @@
         "buildType": "apk"
       }
     },
+    "qa-ios-simulator": {
+      "environment": "preview",
+      "ios": {
+        "simulator": true
+      }
+    },
     "production": {
       "environment": "production"
     }
