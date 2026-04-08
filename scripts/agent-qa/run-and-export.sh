@@ -25,6 +25,14 @@ case "${QA_PLATFORM_VALUE}" in
 esac
 
 export APP_PATH="${APP_PATH_ARG}"
+DEVICE_NAME_VALUE="${DEVICE_NAME:-}"
+if [ -z "${DEVICE_NAME_VALUE}" ]; then
+  if [ "${QA_PLATFORM_VALUE}" = "ios" ]; then
+    DEVICE_NAME_VALUE="${AGENT_DEVICE_IOS_DEVICE:-}"
+  else
+    DEVICE_NAME_VALUE="${AGENT_DEVICE_ANDROID_DEVICE:-}"
+  fi
+fi
 if printf '%s' "${PR_JSON:-}" | jq -c . > "${PR_JSON_PATH}" 2>/dev/null; then
   :
 else
@@ -36,6 +44,7 @@ jq -n \
   --arg platform "${QA_PLATFORM_VALUE}" \
   --arg artifactPath "${APP_PATH_ARG}" \
   --arg appId "${APPLICATION_ID_VALUE}" \
+  --arg deviceName "${DEVICE_NAME_VALUE}" \
   --arg buildId "${BUILD_ID:-}" \
   --arg workflowUrl "${WORKFLOW_URL:-}" \
   --arg outputDir "${OUTPUT_DIR}" \
@@ -44,11 +53,14 @@ jq -n \
   '
   {
     workspaceRoot: $workspaceRoot,
-    mobile: {
-      platform: $platform,
-      artifactPath: $artifactPath,
-      appId: $appId
-    },
+    mobile: (
+      {
+        platform: $platform,
+        artifactPath: $artifactPath,
+        appId: $appId
+      }
+      + (if $deviceName == "" then {} else {deviceName: $deviceName} end)
+    ),
     output: {
       outputDir: $outputDir,
       screenshotsDir: $screenshotsDir
@@ -90,7 +102,7 @@ jq -n \
   ' > "${CONTEXT_PATH}"
 
 set +e
-npm run agent-qa -- --context "${CONTEXT_PATH}"
+cali qa --env mobile-pr --quiet --context "${CONTEXT_PATH}"
 EXIT_CODE=$?
 
 STATUS="$(cat artifacts/qa/status.txt 2>/dev/null || printf blocked)"
