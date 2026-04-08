@@ -106,7 +106,7 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@0.10.1 cali@0.4.0-0
+          npm install -g agent-device@latest cali@0.4.0-0
       - uses: eas/download_build
         id: download_build
         with:
@@ -146,12 +146,15 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@0.10.1 cali@0.4.0-0
+          npm install -g agent-device@latest cali@0.4.0-0
       - uses: eas/download_build
         id: download_build
         with:
           build_id: ${{ env.BUILD_ID }}
           extensions: [app]
+      - id: provision_ios_simulator
+        run: |
+          bash ./scripts/agent-qa/provision-ios-simulator.sh
       - id: run_agent_qa
         run: |
           bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
