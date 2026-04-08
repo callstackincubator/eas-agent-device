@@ -116,10 +116,6 @@ jobs:
         run: |
           bash ./scripts/agent-qa/provision-android-emulator.sh
       - id: run_agent_qa
-        env:
-          AGENT_DEVICE_SESSION: qa-android
-          AGENT_DEVICE_PLATFORM: android
-          AGENT_DEVICE_SESSION_LOCK: strip
         run: |
           bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
 
@@ -156,14 +152,7 @@ jobs:
         with:
           build_id: ${{ env.BUILD_ID }}
           extensions: [app]
-      - id: provision_ios_simulator
-        run: |
-          bash ./scripts/agent-qa/provision-ios-simulator.sh
       - id: run_agent_qa
-        env:
-          AGENT_DEVICE_SESSION: qa-ios
-          AGENT_DEVICE_PLATFORM: ios
-          AGENT_DEVICE_SESSION_LOCK: strip
         run: |
           bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
 

@@ -1,12 +1,12 @@
 # EAS agent-device demo
 
-This repo is a minimal Expo + CNG example for running AI-assisted Android and iOS QA on EAS Workflows.
+This repo is a minimal Expo + CNG example for running AI-assisted Android and iOS QA on EAS Workflows with [`cali`](https://github.com/callstackincubator/cali).
 
 ## What it does
 
 - Reuses compatible Android and iOS simulator builds with `fingerprint` + `get-build` + `repack`
 - Falls back to a fresh `build` when the fingerprint changes
-- Runs a small Node.js QA agent built with the AI SDK `ToolLoopAgent`
+- Uses `cali qa` as the mobile QA agent runtime
 - Uses `agent-device` to drive the Android app and iOS simulator, take screenshots, and summarize findings
 - Posts one combined mobile QA summary back to the GitHub pull request with `github-comment`
 - Optionally uploads screenshots to Vercel Blob so the PR comment can link them
@@ -17,7 +17,8 @@ This repo is a minimal Expo + CNG example for running AI-assisted Android and iO
 
 - [eas.json](./eas.json)
 - [.eas/workflows/agent-qa-mobile.yml](./.eas/workflows/agent-qa-mobile.yml)
-- [scripts/agent-qa/index.ts](./scripts/agent-qa/index.ts)
+- [cali.config.json](./cali.config.json)
+- [scripts/agent-qa/run-and-export.sh](./scripts/agent-qa/run-and-export.sh)
 
 ## Required setup
 
@@ -38,34 +39,33 @@ Optional environment variables for the QA job:
 
 ```bash
 npm install
-npx tsc --noEmit
+npx cali qa --help
 ```
 
-The workflow runner writes `section.md`, `status.txt`, and `report.json` to `artifacts/qa/` during execution. Temporary screenshots are written outside the workspace and uploaded to Vercel Blob when configured.
+The workflow runner writes `section.md`, `status.txt`, `report.json`, and `cali-context.json` to `artifacts/qa/` during execution. Screenshots are written to `artifacts/qa/screenshots` and uploaded to Vercel Blob when configured.
 
-To execute the runner directly with Node 24, provide the same environment variables the workflow sets:
+To execute the QA command directly, provide the same inputs that the workflow uses:
 
 Android:
 
 ```bash
 AI_GATEWAY_API_KEY=... \
-QA_PLATFORM=android \
-APP_PATH=/absolute/path/to/app.apk \
-APPLICATION_ID=dev.expo.easagentdevice \
-BUILD_ID=test-build \
-PR_JSON='{"number":1,"title":"Test PR","body":"Smoke test"}' \
-node ./scripts/agent-qa/index.ts
+./node_modules/.bin/cali qa \
+  --env local-android \
+  --artifact /absolute/path/to/app.apk \
+  --app-id dev.expo.easagentdevice \
+  --device ci-android \
+  --prompt "verify the updated welcome title"
 ```
 
 iOS simulator:
 
 ```bash
 AI_GATEWAY_API_KEY=... \
-QA_PLATFORM=ios \
-APP_PATH=/absolute/path/to/MyApp.app \
-APPLICATION_ID=dev.expo.easagentdevice \
-AGENT_DEVICE_IOS_DEVICE="iPhone 17" \
-BUILD_ID=test-build \
-PR_JSON='{"number":1,"title":"Test PR","body":"Smoke test"}' \
-node ./scripts/agent-qa/index.ts
+./node_modules/.bin/cali qa \
+  --env local-ios \
+  --artifact /absolute/path/to/MyApp.app \
+  --app-id dev.expo.easagentdevice \
+  --device "iPhone 17" \
+  --prompt "verify the updated welcome title"
 ```

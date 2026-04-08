@@ -5,6 +5,11 @@ set -uo pipefail
 APP_PATH_ARG="${1:?APP_PATH argument is required}"
 QA_PLATFORM_VALUE="${QA_PLATFORM:?QA_PLATFORM is required}"
 APPLICATION_ID_VALUE="${APPLICATION_ID:?APPLICATION_ID is required}"
+OUTPUT_DIR="artifacts/qa"
+CONTEXT_PATH="${OUTPUT_DIR}/cali-context.json"
+SCREENSHOTS_DIR="${OUTPUT_DIR}/screenshots"
+
+mkdir -p "${OUTPUT_DIR}"
 
 case "${QA_PLATFORM_VALUE}" in
   ios)
@@ -18,37 +23,64 @@ case "${QA_PLATFORM_VALUE}" in
     ;;
 esac
 
-set +e
 export APP_PATH="${APP_PATH_ARG}"
-
-BOOTSTRAP_ERROR=""
-if [ "${QA_PLATFORM_VALUE}" = "android" ]; then
-  BOOTSTRAP_STEP="install"
-  agent-device install "${APPLICATION_ID_VALUE}" "${APP_PATH}"
-else
-  BOOTSTRAP_STEP="reinstall"
-  agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}"
-fi
-BOOTSTRAP_EXIT=$?
-
-if [ "${BOOTSTRAP_EXIT}" -ne 0 ] && [ "${QA_PLATFORM_VALUE}" = "android" ]; then
-  BOOTSTRAP_STEP="reinstall"
-  agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}"
-  BOOTSTRAP_EXIT=$?
+DEVICE_NAME_VALUE="${DEVICE_NAME:-}"
+if [ -z "${DEVICE_NAME_VALUE}" ]; then
+  if [ "${QA_PLATFORM_VALUE}" = "ios" ]; then
+    DEVICE_NAME_VALUE="${AGENT_DEVICE_IOS_DEVICE:-}"
+  else
+    DEVICE_NAME_VALUE="${AGENT_DEVICE_ANDROID_DEVICE:-}"
+  fi
 fi
 
-if [ "${BOOTSTRAP_EXIT}" -eq 0 ]; then
-  BOOTSTRAP_STEP="open"
-  agent-device open "${APPLICATION_ID_VALUE}" --relaunch
-  BOOTSTRAP_EXIT=$?
-fi
+jq -n \
+  --arg workspaceRoot "${PWD}" \
+  --arg platform "${QA_PLATFORM_VALUE}" \
+  --arg artifactPath "${APP_PATH_ARG}" \
+  --arg appId "${APPLICATION_ID_VALUE}" \
+  --arg deviceName "${DEVICE_NAME_VALUE}" \
+  --arg buildId "${BUILD_ID:-}" \
+  --arg workflowUrl "${WORKFLOW_URL:-}" \
+  --arg outputDir "${OUTPUT_DIR}" \
+  --arg screenshotsDir "${SCREENSHOTS_DIR}" \
+  --argjson pr "${PR_JSON:-{}}" \
+  '
+  {
+    workspaceRoot: $workspaceRoot,
+    pullRequest:
+      if ($pr | type) == "object" and (($pr | keys) | length) > 0 then
+        {
+          number: ($pr.number // null),
+          title: ($pr.title // null),
+          body: ($pr.body // null),
+          url: ($pr.html_url // $pr.url // null),
+          labels: (($pr.labels // []) | map(if type == "object" then (.name // empty) else . end) | map(select(. != ""))),
+          isDraft: ($pr.draft // false),
+          baseBranch: ($pr.base.ref // null),
+          headBranch: ($pr.head.ref // null)
+        }
+      else
+        null
+      end,
+    mobile: {
+      platform: $platform,
+      artifactPath: $artifactPath,
+      appId: $appId,
+      deviceName: if $deviceName == "" then null else $deviceName end
+    },
+    build: {
+      id: if $buildId == "" then null else $buildId end,
+      workflowUrl: if $workflowUrl == "" then null else $workflowUrl end
+    },
+    output: {
+      outputDir: $outputDir,
+      screenshotsDir: $screenshotsDir
+    }
+  }
+  ' > "${CONTEXT_PATH}"
 
-if [ "${BOOTSTRAP_EXIT}" -ne 0 ]; then
-  BOOTSTRAP_ERROR="Deterministic ${PLATFORM_LABEL} app bootstrap failed during ${BOOTSTRAP_STEP}. See workflow logs above."
-fi
-
-export AGENT_QA_BOOTSTRAP_ERROR="${BOOTSTRAP_ERROR}"
-npm run agent-qa
+set +e
+npm run agent-qa -- --context "${CONTEXT_PATH}"
 EXIT_CODE=$?
 
 STATUS="$(cat artifacts/qa/status.txt 2>/dev/null || printf blocked)"
