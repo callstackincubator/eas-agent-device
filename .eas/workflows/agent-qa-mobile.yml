@@ -106,7 +106,7 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@latest cali@0.4.0-1
+          npm install -g agent-device@latest cali@0.4.0-2
       - id: install_agent_device_skill
         run: |
           npx skills add callstackincubator/agent-device --agent codex --skill agent-device -y
@@ -149,7 +149,7 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@latest cali@0.4.0-1
+          npm install -g agent-device@latest cali@0.4.0-2
       - id: install_agent_device_skill
         run: |
           npx skills add callstackincubator/agent-device --agent codex --skill agent-device -y
