@@ -8,6 +8,7 @@ APPLICATION_ID_VALUE="${APPLICATION_ID:?APPLICATION_ID is required}"
 OUTPUT_DIR="artifacts/qa"
 CONTEXT_PATH="${OUTPUT_DIR}/cali-context.json"
 SCREENSHOTS_DIR="${OUTPUT_DIR}/screenshots"
+PR_JSON_PATH="${OUTPUT_DIR}/pr.json"
 
 mkdir -p "${OUTPUT_DIR}"
 
@@ -33,6 +34,12 @@ if [ -z "${DEVICE_NAME_VALUE}" ]; then
   fi
 fi
 
+if printf '%s' "${PR_JSON:-}" | jq -c . > "${PR_JSON_PATH}" 2>/dev/null; then
+  :
+else
+  printf '{}\n' > "${PR_JSON_PATH}"
+fi
+
 jq -n \
   --arg workspaceRoot "${PWD}" \
   --arg platform "${QA_PLATFORM_VALUE}" \
@@ -43,7 +50,7 @@ jq -n \
   --arg workflowUrl "${WORKFLOW_URL:-}" \
   --arg outputDir "${OUTPUT_DIR}" \
   --arg screenshotsDir "${SCREENSHOTS_DIR}" \
-  --argjson pr "${PR_JSON:-{}}" \
+  --slurpfile prFile "${PR_JSON_PATH}" \
   '
   {
     workspaceRoot: $workspaceRoot,
@@ -61,19 +68,19 @@ jq -n \
     }
   }
   + (
-      if ($pr | type) == "object" and (($pr | keys) | length) > 0 then
+      if (($prFile[0] // {}) | type) == "object" and (((($prFile[0] // {}) | keys) | length) > 0) then
         {
           pullRequest: (
             {
-              labels: (($pr.labels // []) | map(if type == "object" then (.name // empty) else . end) | map(select(. != ""))),
-              isDraft: ($pr.draft // false)
+              labels: (((($prFile[0] // {}).labels) // []) | map(if type == "object" then (.name // empty) else . end) | map(select(. != ""))),
+              isDraft: ((($prFile[0] // {}).draft) // false)
             }
-            + (if $pr.number == null then {} else {number: $pr.number} end)
-            + (if $pr.title == null then {} else {title: $pr.title} end)
-            + {body: ($pr.body // null)}
-            + (if ($pr.html_url // $pr.url) == null then {} else {url: ($pr.html_url // $pr.url)} end)
-            + (if $pr.base.ref == null then {} else {baseBranch: $pr.base.ref} end)
-            + (if $pr.head.ref == null then {} else {headBranch: $pr.head.ref} end)
+            + (if (($prFile[0] // {}).number) == null then {} else {number: (($prFile[0] // {}).number)} end)
+            + (if (($prFile[0] // {}).title) == null then {} else {title: (($prFile[0] // {}).title)} end)
+            + {body: ((($prFile[0] // {}).body) // null)}
+            + (if (((($prFile[0] // {}).html_url) // (($prFile[0] // {}).url)) == null) then {} else {url: (((($prFile[0] // {}).html_url) // (($prFile[0] // {}).url)))} end)
+            + (if (((($prFile[0] // {}).base) // {}).ref) == null then {} else {baseBranch: (((($prFile[0] // {}).base) // {}).ref)} end)
+            + (if (((($prFile[0] // {}).head) // {}).ref) == null then {} else {headBranch: (((($prFile[0] // {}).head) // {}).ref)} end)
           )
         }
       else
@@ -150,7 +157,7 @@ EOF
     --arg model "${QA_MODEL:-openai/gpt-5.4-mini}" \
     --arg buildId "${BUILD_ID:-}" \
     --arg workflowUrl "${WORKFLOW_URL:-}" \
-    --argjson pr "${PR_JSON:-{}}" \
+    --slurpfile prFile "${PR_JSON_PATH}" \
     --arg summary "${FALLBACK_SUMMARY}" \
     '{
       generatedAt: (now | todateiso8601),
@@ -159,7 +166,7 @@ EOF
       workflowUrl: $workflowUrl,
       platform: $platform,
       platformLabel: $platformLabel,
-      prNumber: ($pr.number // 0),
+      prNumber: ((($prFile[0] // {}).number) // 0),
       screenshots: [],
       agentDeviceTrace: [],
       overallStatus: "blocked",
