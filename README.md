@@ -35,6 +35,8 @@ Optional environment variables for the QA job:
 - `QA_MODEL`: Override the default model (`openai/gpt-5.4-mini`)
 - `BLOB_READ_WRITE_TOKEN`: Upload screenshots to Vercel Blob and include public links in the PR comment
 
+The repo-level [cali.config.json](./cali.config.json) points Cali at the bundled [`agent-device`](https://www.npmjs.com/package/agent-device) skills under `./node_modules/agent-device/skills`, so CI does not need a separate `~/.agents/skills` setup.
+
 ## Local smoke test
 
 ```bash

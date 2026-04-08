@@ -1,4 +1,7 @@
 {
+  "skillPaths": [
+    "./node_modules/agent-device/skills"
+  ],
   "commands": {
     "qa": {
       "extraInstructions": [
