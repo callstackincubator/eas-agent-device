@@ -47,36 +47,52 @@ jq -n \
   '
   {
     workspaceRoot: $workspaceRoot,
-    pullRequest:
-      if ($pr | type) == "object" and (($pr | keys) | length) > 0 then
-        {
-          number: ($pr.number // null),
-          title: ($pr.title // null),
-          body: ($pr.body // null),
-          url: ($pr.html_url // $pr.url // null),
-          labels: (($pr.labels // []) | map(if type == "object" then (.name // empty) else . end) | map(select(. != ""))),
-          isDraft: ($pr.draft // false),
-          baseBranch: ($pr.base.ref // null),
-          headBranch: ($pr.head.ref // null)
-        }
-      else
-        null
-      end,
-    mobile: {
-      platform: $platform,
-      artifactPath: $artifactPath,
-      appId: $appId,
-      deviceName: if $deviceName == "" then null else $deviceName end
-    },
-    build: {
-      id: if $buildId == "" then null else $buildId end,
-      workflowUrl: if $workflowUrl == "" then null else $workflowUrl end
-    },
+    mobile: (
+      {
+        platform: $platform,
+        artifactPath: $artifactPath,
+        appId: $appId
+      }
+      + (if $deviceName == "" then {} else {deviceName: $deviceName} end)
+    ),
     output: {
       outputDir: $outputDir,
       screenshotsDir: $screenshotsDir
     }
   }
+  + (
+      if ($pr | type) == "object" and (($pr | keys) | length) > 0 then
+        {
+          pullRequest: (
+            {
+              labels: (($pr.labels // []) | map(if type == "object" then (.name // empty) else . end) | map(select(. != ""))),
+              isDraft: ($pr.draft // false)
+            }
+            + (if $pr.number == null then {} else {number: $pr.number} end)
+            + (if $pr.title == null then {} else {title: $pr.title} end)
+            + {body: ($pr.body // null)}
+            + (if ($pr.html_url // $pr.url) == null then {} else {url: ($pr.html_url // $pr.url)} end)
+            + (if $pr.base.ref == null then {} else {baseBranch: $pr.base.ref} end)
+            + (if $pr.head.ref == null then {} else {headBranch: $pr.head.ref} end)
+          )
+        }
+      else
+        {}
+      end
+    )
+  + (
+      if $buildId == "" and $workflowUrl == "" then
+        {}
+      else
+        {
+          build: (
+            {}
+            + (if $buildId == "" then {} else {id: $buildId} end)
+            + (if $workflowUrl == "" then {} else {workflowUrl: $workflowUrl} end)
+          )
+        }
+      end
+    )
   ' > "${CONTEXT_PATH}"
 
 set +e
@@ -114,6 +130,44 @@ else
 
 No ${PLATFORM_LABEL} QA section was produced.
 "
+fi
+
+if [ ! -f artifacts/qa/report.json ]; then
+  FALLBACK_SUMMARY="The Cali QA command failed before it could publish a report. Check the run_agent_qa logs above."
+  cat > artifacts/qa/status.txt <<EOF
+blocked
+EOF
+  cat > artifacts/qa/section.md <<EOF
+### ${PLATFORM_LABEL}
+
+**Status:** ⛔ blocked
+
+${FALLBACK_SUMMARY}
+EOF
+  jq -n \
+    --arg platform "${QA_PLATFORM_VALUE}" \
+    --arg platformLabel "${PLATFORM_LABEL}" \
+    --arg model "${QA_MODEL:-openai/gpt-5.4-mini}" \
+    --arg buildId "${BUILD_ID:-}" \
+    --arg workflowUrl "${WORKFLOW_URL:-}" \
+    --argjson pr "${PR_JSON:-{}}" \
+    --arg summary "${FALLBACK_SUMMARY}" \
+    '{
+      generatedAt: (now | todateiso8601),
+      model: $model,
+      buildId: $buildId,
+      workflowUrl: $workflowUrl,
+      platform: $platform,
+      platformLabel: $platformLabel,
+      prNumber: ($pr.number // 0),
+      screenshots: [],
+      agentDeviceTrace: [],
+      overallStatus: "blocked",
+      summary: $summary,
+      checked: ["Attempted to run cali qa."],
+      issues: [$summary],
+      nextSteps: ["Inspect the cali startup logs in the workflow output and retry the run."]
+    }' > artifacts/qa/report.json
 fi
 
 if [ -f artifacts/qa/report.json ]; then

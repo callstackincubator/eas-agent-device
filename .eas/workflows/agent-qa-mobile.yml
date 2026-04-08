@@ -106,7 +106,7 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@0.10.1
+          npm install -g agent-device@0.10.1 cali@0.4.0-0
       - uses: eas/download_build
         id: download_build
         with:
@@ -146,7 +146,7 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@0.10.1
+          npm install -g agent-device@0.10.1 cali@0.4.0-0
       - uses: eas/download_build
         id: download_build
         with:
