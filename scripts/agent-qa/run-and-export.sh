@@ -51,8 +51,21 @@ jq -n \
   --arg screenshotsDir "${SCREENSHOTS_DIR}" \
   --slurpfile prFile "${PR_JSON_PATH}" \
   '
+  def pr: ($prFile[0] // {});
+
   {
     workspaceRoot: $workspaceRoot,
+    repository: (
+      {
+        cloneUrl: ""
+      }
+      + (if (((pr.base // {}).repo // {}).owner // {}).login == null then {} else {owner: ((((pr.base // {}).repo // {}).owner // {}).login)} end)
+      + (if (((pr.base // {}).repo // {}).name) == null then {} else {name: (((pr.base // {}).repo // {}).name)} end)
+      + (if (((((pr.base // {}).repo // {}).html_url) // "") | startswith("https://github.com/")) then {provider: "github.com"} else {} end)
+      + (if (((pr.base // {}).ref) == null then {} else {defaultBranch: ((pr.base // {}).ref)} end))
+      + (if (((pr.head // {}).ref) == null then {} else {currentBranch: ((pr.head // {}).ref)} end))
+      + (if (((pr.head // {}).sha) == null then {} else {commitSha: ((pr.head // {}).sha)} end))
+    ),
     mobile: (
       {
         platform: $platform,
@@ -67,19 +80,19 @@ jq -n \
     }
   }
   + (
-      if (($prFile[0] // {}) | type) == "object" and (((($prFile[0] // {}) | keys) | length) > 0) then
+      if (pr | type) == "object" and (((pr | keys) | length) > 0) then
         {
           pullRequest: (
             {
-              labels: (((($prFile[0] // {}).labels) // []) | map(if type == "object" then (.name // empty) else . end) | map(select(. != ""))),
-              isDraft: ((($prFile[0] // {}).draft) // false)
+              labels: (((pr.labels) // []) | map(if type == "object" then (.name // empty) else . end) | map(select(. != ""))),
+              isDraft: ((pr.draft) // false)
             }
-            + (if (($prFile[0] // {}).number) == null then {} else {number: (($prFile[0] // {}).number)} end)
-            + (if (($prFile[0] // {}).title) == null then {} else {title: (($prFile[0] // {}).title)} end)
-            + {body: ((($prFile[0] // {}).body) // null)}
-            + (if (((($prFile[0] // {}).html_url) // (($prFile[0] // {}).url)) == null) then {} else {url: (((($prFile[0] // {}).html_url) // (($prFile[0] // {}).url)))} end)
-            + (if (((($prFile[0] // {}).base) // {}).ref) == null then {} else {baseBranch: (((($prFile[0] // {}).base) // {}).ref)} end)
-            + (if (((($prFile[0] // {}).head) // {}).ref) == null then {} else {headBranch: (((($prFile[0] // {}).head) // {}).ref)} end)
+            + (if (pr.number) == null then {} else {number: (pr.number)} end)
+            + (if (pr.title) == null then {} else {title: (pr.title)} end)
+            + {body: ((pr.body) // null)}
+            + (if (((pr.html_url) // (pr.url)) == null) then {} else {url: (((pr.html_url) // (pr.url)))} end)
+            + (if (((pr.base) // {}).ref) == null then {} else {baseBranch: (((pr.base) // {}).ref)} end)
+            + (if (((pr.head) // {}).ref) == null then {} else {headBranch: (((pr.head) // {}).ref)} end)
           )
         }
       else
