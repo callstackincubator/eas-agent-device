@@ -110,9 +110,9 @@ if [ -f "${SCREENSHOTS_JSON_PATH}" ]; then
         [
           (.screenshots // [])[]
           | if .blobUrl then
-              "**\((.label // .fileName // \"Screenshot\"))**<br><a href=\"\(.blobUrl)\"><img src=\"\(.blobUrl)\" alt=\"\((.label // .fileName // \"Screenshot\"))\" height=\"500\" /></a>"
+              "**\((.label // .fileName // "Screenshot"))**<br><a href='\''\(.blobUrl)'\''><img src='\''\(.blobUrl)'\'' alt='\''\((.label // .fileName // "Screenshot"))'\'' height='\''500'\'' /></a>"
             else
-              "**\((.label // .fileName // \"Screenshot\"))**<br>\(.fileName // \"screenshot\")"
+              "**\((.label // .fileName // "Screenshot"))**<br>\(.fileName // "screenshot")"
             end
         ] | join("<br><br>")
       end
