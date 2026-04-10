@@ -37,35 +37,18 @@ Optional environment variables for the QA job:
 
 The workflow installs the [`agent-device`](https://www.npmjs.com/package/agent-device) skill explicitly in CI with `npx skills add callstackincubator/agent-device --agent codex --skill agent-device -y`, so Cali can discover it from the standard `.agents/skills` location.
 
-## Local smoke test
+## CI flow
 
-```bash
-npm install
-npx cali qa --help
-```
+The workflow uses `cali qa --ci eas ...` for each platform and then `cali export-ci` to produce:
 
-Local runs use the `local-android` and `local-ios` Cali envs. The EAS workflow uses `cali qa --ci eas ...`, not `--env mobile-pr`.
+- `artifacts/qa/report.json`
+- `artifacts/qa/section.md`
+- `artifacts/qa/status.txt`
+- `artifacts/qa/summary.txt`
+- `artifacts/qa/top-issue.txt`
+- `artifacts/qa/screenshots.md`
+- `artifacts/qa/screenshots.json`
+- `artifacts/qa/ci-comment.md`
+- `artifacts/qa/ci-output.json`
 
-The workflow runner writes `report.json`, `section.md`, `status.txt`, and CI export files like `ci-comment.md` and `ci-output.json` to `artifacts/qa/`. Screenshots are written to `artifacts/qa/screenshots` and uploaded to Vercel Blob when configured.
-
-To execute the QA command directly, provide the same core inputs that the workflow uses. `--device` is optional locally; pass it only when you want to target a specific simulator or emulator.
-
-Android:
-
-```bash
-AI_GATEWAY_API_KEY=... \
-npm run agent-qa:android -- \
-  --artifact /absolute/path/to/app.apk \
-  --app-id dev.expo.easagentdevice \
-  --prompt "verify the updated welcome title"
-```
-
-iOS simulator:
-
-```bash
-AI_GATEWAY_API_KEY=... \
-npm run agent-qa:ios -- \
-  --artifact /absolute/path/to/MyApp.app \
-  --app-id dev.expo.easagentdevice \
-  --prompt "verify the updated welcome title"
-```
+Android and iOS reports are then combined into one PR comment in the final workflow step.
