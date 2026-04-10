@@ -35,7 +35,7 @@ Optional environment variables for the QA job:
 - `QA_MODEL`: Override the default model (`openai/gpt-5.4-mini`)
 - `BLOB_READ_WRITE_TOKEN`: Upload screenshots to Vercel Blob and include public links in the PR comment
 
-The repo-level [cali.config.json](./cali.config.json) points Cali at the bundled [`agent-device`](https://www.npmjs.com/package/agent-device) skills under `./node_modules/agent-device/skills`, so CI does not need a separate `~/.agents/skills` setup.
+The workflow installs the [`agent-device`](https://www.npmjs.com/package/agent-device) skill explicitly in CI with `npx skills add callstackincubator/agent-device --agent codex --skill agent-device -y`, so Cali can discover it from the standard `.agents/skills` location.
 
 ## Local smoke test
 
@@ -44,7 +44,9 @@ npm install
 npx cali qa --help
 ```
 
-The workflow runner writes `section.md`, `status.txt`, `report.json`, and `cali-context.json` to `artifacts/qa/` during execution. Screenshots are written to `artifacts/qa/screenshots` and uploaded to Vercel Blob when configured.
+Local runs use the `local-android` and `local-ios` Cali envs. The EAS workflow uses `cali qa --ci eas ...`, not `--env mobile-pr`.
+
+The workflow runner writes `report.json`, `section.md`, `status.txt`, and CI export files like `ci-comment.md` and `ci-output.json` to `artifacts/qa/`. Screenshots are written to `artifacts/qa/screenshots` and uploaded to Vercel Blob when configured.
 
 To execute the QA command directly, provide the same inputs that the workflow uses:
 
@@ -52,8 +54,7 @@ Android:
 
 ```bash
 AI_GATEWAY_API_KEY=... \
-./node_modules/.bin/cali qa \
-  --env local-android \
+npm run agent-qa:android -- \
   --artifact /absolute/path/to/app.apk \
   --app-id dev.expo.easagentdevice \
   --device ci-android \
@@ -64,8 +65,7 @@ iOS simulator:
 
 ```bash
 AI_GATEWAY_API_KEY=... \
-./node_modules/.bin/cali qa \
-  --env local-ios \
+npm run agent-qa:ios -- \
   --artifact /absolute/path/to/MyApp.app \
   --app-id dev.expo.easagentdevice \
   --device "iPhone 17" \

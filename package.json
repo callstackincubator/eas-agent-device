@@ -9,7 +9,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "agent-qa": "cali qa --env mobile-pr --quiet"
+    "agent-qa:android": "cali qa --env local-android --quiet",
+    "agent-qa:ios": "cali qa --env local-ios --quiet"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -18,6 +19,7 @@
     "@react-navigation/native": "^7.1.8",
     "expo": "^55.0.8",
     "expo-constants": "~55.0.9",
+    "expo-dev-client": "~55.0.23",
     "expo-font": "~55.0.4",
     "expo-haptics": "~55.0.9",
     "expo-image": "~55.0.6",
@@ -40,7 +42,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.10",
-    "cali": "0.4.0-0",
+    "cali": "0.4.0-1",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~55.0.0",
     "typescript": "~5.9.2"
