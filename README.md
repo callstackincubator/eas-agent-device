@@ -48,7 +48,7 @@ Local runs use the `local-android` and `local-ios` Cali envs. The EAS workflow u
 
 The workflow runner writes `report.json`, `section.md`, `status.txt`, and CI export files like `ci-comment.md` and `ci-output.json` to `artifacts/qa/`. Screenshots are written to `artifacts/qa/screenshots` and uploaded to Vercel Blob when configured.
 
-To execute the QA command directly, provide the same inputs that the workflow uses:
+To execute the QA command directly, provide the same core inputs that the workflow uses. `--device` is optional locally; pass it only when you want to target a specific simulator or emulator.
 
 Android:
 
@@ -57,7 +57,6 @@ AI_GATEWAY_API_KEY=... \
 npm run agent-qa:android -- \
   --artifact /absolute/path/to/app.apk \
   --app-id dev.expo.easagentdevice \
-  --device ci-android \
   --prompt "verify the updated welcome title"
 ```
 
@@ -68,6 +67,5 @@ AI_GATEWAY_API_KEY=... \
 npm run agent-qa:ios -- \
   --artifact /absolute/path/to/MyApp.app \
   --app-id dev.expo.easagentdevice \
-  --device "iPhone 17" \
   --prompt "verify the updated welcome title"
 ```
