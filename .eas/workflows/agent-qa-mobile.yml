@@ -88,7 +88,7 @@ jobs:
     environment: preview
     runs_on: linux-medium-nested-virtualization
     outputs:
-      report_json: ${{ steps.capture_qa_outputs.outputs.report_json }}
+      report_b64: ${{ steps.capture_qa_outputs.outputs.report_b64 }}
     env:
       BUILD_ID: ${{ after.android_repack.outputs.build_id || after.android_build.outputs.build_id }}
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
@@ -102,7 +102,7 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@latest cali@0.4.0-4
+          npm install -g agent-device@latest cali@0.4.0-5
       - id: install_agent_device_skill
         run: |
           npx skills add callstackincubator/agent-device --agent codex --skill agent-device -y
@@ -119,7 +119,7 @@ jobs:
           bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}" || true
       - id: capture_qa_outputs
         run: |
-          set-output report_json "$(jq -c . artifacts/qa/report.json)"
+          set-output report_b64 "$(base64 < artifacts/qa/report.json | tr -d '\n')"
 
   qa_ios:
     name: iOS agent-device QA
@@ -128,7 +128,7 @@ jobs:
     environment: preview
     runs_on: macos-medium
     outputs:
-      report_json: ${{ steps.capture_qa_outputs.outputs.report_json }}
+      report_b64: ${{ steps.capture_qa_outputs.outputs.report_b64 }}
     env:
       BUILD_ID: ${{ after.ios_repack.outputs.build_id || after.ios_build.outputs.build_id }}
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
@@ -144,7 +144,7 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@latest cali@0.4.0-4
+          npm install -g agent-device@latest cali@0.4.0-5
       - id: install_agent_device_skill
         run: |
           npx skills add callstackincubator/agent-device --agent codex --skill agent-device -y
@@ -158,7 +158,7 @@ jobs:
           bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}" || true
       - id: capture_qa_outputs
         run: |
-          set-output report_json "$(jq -c . artifacts/qa/report.json)"
+          set-output report_b64 "$(base64 < artifacts/qa/report.json | tr -d '\n')"
 
   compose_comment:
     name: Compose PR comment
@@ -172,20 +172,20 @@ jobs:
       - uses: eas/checkout
       - id: install_cali
         run: |
-          npm install -g cali@0.4.0-4
+          npm install -g cali@0.4.0-5
       - id: compose
         env:
-          ANDROID_REPORT_JSON: ${{ after.qa_android.outputs.report_json || '' }}
-          IOS_REPORT_JSON: ${{ after.qa_ios.outputs.report_json || '' }}
+          ANDROID_REPORT_B64: ${{ after.qa_android.outputs.report_b64 || '' }}
+          IOS_REPORT_B64: ${{ after.qa_ios.outputs.report_b64 || '' }}
         run: |
           mkdir -p artifacts/android artifacts/ios artifacts/combined-comment
           EXPORT_ARGS=()
-          if [ -n "${ANDROID_REPORT_JSON}" ]; then
-            printf '%s' "${ANDROID_REPORT_JSON}" | jq . > artifacts/android/report.json
+          if [ -n "${ANDROID_REPORT_B64}" ]; then
+            printf '%s' "${ANDROID_REPORT_B64}" | base64 -d > artifacts/android/report.json
             EXPORT_ARGS+=(--android artifacts/android/report.json)
           fi
-          if [ -n "${IOS_REPORT_JSON}" ]; then
-            printf '%s' "${IOS_REPORT_JSON}" | jq . > artifacts/ios/report.json
+          if [ -n "${IOS_REPORT_B64}" ]; then
+            printf '%s' "${IOS_REPORT_B64}" | base64 -d > artifacts/ios/report.json
             EXPORT_ARGS+=(--ios artifacts/ios/report.json)
           fi
           if [ "${#EXPORT_ARGS[@]}" -eq 0 ]; then
