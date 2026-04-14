@@ -1,0 +1,13 @@
+{
+  "skillPaths": [
+    "./node_modules/agent-device/skills"
+  ],
+  "commands": {
+    "qa": {
+      "extraInstructions": [
+        "When you need to verify whether text is visible on screen, prefer `snapshot` over `snapshot -i`. Use `snapshot -i` mainly for interactive exploration and choosing refs.",
+        "When you save screenshots, use short descriptive file names and include matching screenshotLabels so downstream PR comments can label them clearly."
+      ]
+    }
+  }
+}

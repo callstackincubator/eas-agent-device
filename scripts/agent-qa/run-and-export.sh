@@ -5,124 +5,66 @@ set -uo pipefail
 APP_PATH_ARG="${1:?APP_PATH argument is required}"
 QA_PLATFORM_VALUE="${QA_PLATFORM:?QA_PLATFORM is required}"
 APPLICATION_ID_VALUE="${APPLICATION_ID:?APPLICATION_ID is required}"
+OUTPUT_DIR="artifacts/qa"
 
-case "${QA_PLATFORM_VALUE}" in
-  ios)
-    PLATFORM_LABEL="iOS"
-    ;;
-  android)
-    PLATFORM_LABEL="Android"
-    ;;
-  *)
-    PLATFORM_LABEL="${QA_PLATFORM_VALUE}"
-    ;;
-esac
+mkdir -p "${OUTPUT_DIR}"
+
+DEVICE_NAME_VALUE="${DEVICE_NAME:-}"
+if [ -z "${DEVICE_NAME_VALUE}" ]; then
+  if [ "${QA_PLATFORM_VALUE}" = "ios" ]; then
+    DEVICE_NAME_VALUE="${AGENT_DEVICE_IOS_DEVICE:-}"
+  else
+    DEVICE_NAME_VALUE="${AGENT_DEVICE_ANDROID_DEVICE:-}"
+  fi
+fi
+
+export CALI_OUTPUT_DIR="${OUTPUT_DIR}"
+
+QA_ARGS=(
+  qa
+  --ci
+  eas
+  --quiet
+  --platform
+  "${QA_PLATFORM_VALUE}"
+  --artifact
+  "${APP_PATH_ARG}"
+  --app-id
+  "${APPLICATION_ID_VALUE}"
+)
+
+if [ -n "${DEVICE_NAME_VALUE}" ]; then
+  QA_ARGS+=(--device "${DEVICE_NAME_VALUE}")
+fi
 
 set +e
-export APP_PATH="${APP_PATH_ARG}"
+cali "${QA_ARGS[@]}"
+QA_EXIT_CODE=$?
+set -e
 
-BOOTSTRAP_ERROR=""
-if [ "${QA_PLATFORM_VALUE}" = "android" ]; then
-  BOOTSTRAP_STEP="install"
-  agent-device install "${APPLICATION_ID_VALUE}" "${APP_PATH}"
-else
-  BOOTSTRAP_STEP="reinstall"
-  agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}"
-fi
-BOOTSTRAP_EXIT=$?
-
-if [ "${BOOTSTRAP_EXIT}" -ne 0 ] && [ "${QA_PLATFORM_VALUE}" = "android" ]; then
-  BOOTSTRAP_STEP="reinstall"
-  agent-device reinstall "${APPLICATION_ID_VALUE}" "${APP_PATH}"
-  BOOTSTRAP_EXIT=$?
-fi
-
-if [ "${BOOTSTRAP_EXIT}" -eq 0 ]; then
-  BOOTSTRAP_STEP="open"
-  agent-device open "${APPLICATION_ID_VALUE}" --relaunch
-  BOOTSTRAP_EXIT=$?
-fi
-
-if [ "${BOOTSTRAP_EXIT}" -ne 0 ]; then
-  BOOTSTRAP_ERROR="Deterministic ${PLATFORM_LABEL} app bootstrap failed during ${BOOTSTRAP_STEP}. See workflow logs above."
-fi
-
-export AGENT_QA_BOOTSTRAP_ERROR="${BOOTSTRAP_ERROR}"
-npm run agent-qa
-EXIT_CODE=$?
-
-STATUS="$(cat artifacts/qa/status.txt 2>/dev/null || printf blocked)"
-case "${STATUS}" in
-  passed)
-    STATUS_LABEL="✅ passed"
-    ;;
-  failed)
-    STATUS_LABEL="❌ failed"
-    ;;
-  blocked)
-    STATUS_LABEL="⛔ blocked"
-    ;;
-  unsure)
-    STATUS_LABEL="🤔 unsure"
-    ;;
-  not_tested)
-    STATUS_LABEL="⚪ not_tested"
-    ;;
-  *)
-    STATUS_LABEL="⚪ ${STATUS}"
-    ;;
-esac
-
-if [ -f artifacts/qa/section.md ]; then
-  SECTION_BODY="$(cat artifacts/qa/section.md)"
-else
-  SECTION_BODY="### ${PLATFORM_LABEL}
-
-**Status:** ${STATUS_LABEL}
-
-No ${PLATFORM_LABEL} QA section was produced.
-"
+if [ ! -f "${OUTPUT_DIR}/report.json" ]; then
+  cat > "${OUTPUT_DIR}/report.json" <<EOF
+{
+  "command": "qa",
+  "overallStatus": "blocked",
+  "summary": "The Cali QA command failed before it could publish a report. Check the run_agent_qa logs above.",
+  "checked": [],
+  "issues": ["The Cali QA command failed before it could publish a report."],
+  "acceptanceCriteriaUsed": [],
+  "screenshots": [],
+  "nextSteps": ["Inspect the Cali startup/bootstrap logs in the workflow output and retry the run."],
+  "context": {
+    "workspaceRoot": "${PWD}",
+    "mobile": {
+      "platform": "${QA_PLATFORM_VALUE}"
+    },
+    "output": {
+      "outputDir": "${OUTPUT_DIR}"
+    }
+  }
+}
+EOF
 fi
 
-if [ -f artifacts/qa/report.json ]; then
-  TOP_ISSUE="$(
-    jq -r '
-      if .overallStatus == "passed" then
-        "N/A"
-      else
-        (.issues[0] // .summary // "N/A")
-      end
-    ' artifacts/qa/report.json | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//'
-  )"
-
-  SCREENSHOTS_CELL="$(
-    jq -r '
-      if (.screenshots | length) == 0 then
-        "N/A"
-      else
-        [
-          .screenshots[]
-          | if .blobUrl then
-              "**\((.label // .fileName))**<br><a href=\"\(.blobUrl)\"><img src=\"\(.blobUrl)\" alt=\"\((.label // .fileName))\" height=\"500\" /></a>"
-            else
-              "**\((.label // .fileName))**<br>\(.fileName) (\(.bytes) bytes)"
-            end
-        ] | join("<br><br>")
-      end
-    ' artifacts/qa/report.json
-  )"
-else
-  if [ "${STATUS}" = "passed" ]; then
-    TOP_ISSUE="N/A"
-  else
-    TOP_ISSUE="No report.json was produced."
-  fi
-  SCREENSHOTS_CELL="N/A"
-fi
-
-set-output status "$STATUS"
-set-output status_label "$STATUS_LABEL"
-set-output top_issue "$TOP_ISSUE"
-set-output screenshots_cell "$SCREENSHOTS_CELL"
-set-output section_body "$SECTION_BODY"
-exit $EXIT_CODE
+cali export-ci --report "${OUTPUT_DIR}/report.json"
+exit "${QA_EXIT_CODE}"

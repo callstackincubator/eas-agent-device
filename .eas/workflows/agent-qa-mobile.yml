@@ -88,11 +88,7 @@ jobs:
     environment: preview
     runs_on: linux-medium-nested-virtualization
     outputs:
-      status: ${{ steps.run_agent_qa.outputs.status }}
-      status_label: ${{ steps.run_agent_qa.outputs.status_label }}
-      top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
-      screenshots_cell: ${{ steps.run_agent_qa.outputs.screenshots_cell }}
-      section_body: ${{ steps.run_agent_qa.outputs.section_body }}
+      report_json: ${{ steps.capture_qa_outputs.outputs.report_json }}
     env:
       BUILD_ID: ${{ after.android_repack.outputs.build_id || after.android_build.outputs.build_id }}
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
@@ -106,7 +102,10 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@0.10.1
+          npm install -g agent-device@latest cali@0.4.0-5
+      - id: install_agent_device_skill
+        run: |
+          npx skills add callstackincubator/agent-device --agent codex --skill agent-device -y
       - uses: eas/download_build
         id: download_build
         with:
@@ -116,12 +115,11 @@ jobs:
         run: |
           bash ./scripts/agent-qa/provision-android-emulator.sh
       - id: run_agent_qa
-        env:
-          AGENT_DEVICE_SESSION: qa-android
-          AGENT_DEVICE_PLATFORM: android
-          AGENT_DEVICE_SESSION_LOCK: strip
         run: |
-          bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
+          bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}" || true
+      - id: capture_qa_outputs
+        run: |
+          set-output report_json "$(node -e 'const fs = require("node:fs"); const report = JSON.stringify(JSON.parse(fs.readFileSync("artifacts/qa/report.json", "utf8"))); process.stdout.write(JSON.stringify(report))')"
 
   qa_ios:
     name: iOS agent-device QA
@@ -130,11 +128,7 @@ jobs:
     environment: preview
     runs_on: macos-medium
     outputs:
-      status: ${{ steps.run_agent_qa.outputs.status }}
-      status_label: ${{ steps.run_agent_qa.outputs.status_label }}
-      top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
-      screenshots_cell: ${{ steps.run_agent_qa.outputs.screenshots_cell }}
-      section_body: ${{ steps.run_agent_qa.outputs.section_body }}
+      report_json: ${{ steps.capture_qa_outputs.outputs.report_json }}
     env:
       BUILD_ID: ${{ after.ios_repack.outputs.build_id || after.ios_build.outputs.build_id }}
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
@@ -150,51 +144,90 @@ jobs:
       - uses: eas/install_node_modules
       - id: install_agent_device
         run: |
-          npm install -g agent-device@0.10.1
+          npm install -g agent-device@latest cali@0.4.0-5
+      - id: install_agent_device_skill
+        run: |
+          npx skills add callstackincubator/agent-device --agent codex --skill agent-device -y
       - uses: eas/download_build
         id: download_build
         with:
           build_id: ${{ env.BUILD_ID }}
           extensions: [app]
-      - id: provision_ios_simulator
-        run: |
-          bash ./scripts/agent-qa/provision-ios-simulator.sh
       - id: run_agent_qa
-        env:
-          AGENT_DEVICE_SESSION: qa-ios
-          AGENT_DEVICE_PLATFORM: ios
-          AGENT_DEVICE_SESSION_LOCK: strip
         run: |
-          bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
+          bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}" || true
+      - id: capture_qa_outputs
+        run: |
+          set-output report_json "$(node -e 'const fs = require("node:fs"); const report = JSON.stringify(JSON.parse(fs.readFileSync("artifacts/qa/report.json", "utf8"))); process.stdout.write(JSON.stringify(report))')"
+
+  compose_comment:
+    name: Compose PR comment
+    after: [qa_android, qa_ios]
+    if: ${{ always() }}
+    environment: preview
+    runs_on: linux-medium
+    outputs:
+      payload: ${{ steps.compose.outputs.payload }}
+    steps:
+      - uses: eas/checkout
+      - id: install_cali
+        run: |
+          npm install -g cali@0.4.0-5
+      - id: compose
+        env:
+          ANDROID_REPORT_JSON: ${{ after.qa_android.outputs.report_json || '' }}
+          IOS_REPORT_JSON: ${{ after.qa_ios.outputs.report_json || '' }}
+        run: |
+          mkdir -p artifacts/android artifacts/ios artifacts/combined-comment
+          decode_report() {
+            local platform="$1"
+            local value="$2"
+            local output_path="$3"
+
+            REPORT_JSON="${value}" REPORT_OUTPUT_PATH="${output_path}" node <<'NODE'
+          const fs = require('node:fs');
+
+          const value = process.env.REPORT_JSON || '';
+          const outputPath = process.env.REPORT_OUTPUT_PATH;
+
+          try {
+            const parsed = JSON.parse(value);
+            const json = typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
+            JSON.parse(json);
+            fs.writeFileSync(outputPath, json);
+          } catch (error) {
+            console.error(error instanceof Error ? error.message : String(error));
+            process.exit(1);
+          }
+          NODE
+          }
+
+          EXPORT_ARGS=()
+          if [ -n "${ANDROID_REPORT_JSON}" ]; then
+            if decode_report android "${ANDROID_REPORT_JSON}" artifacts/android/report.json; then
+              EXPORT_ARGS+=(--android artifacts/android/report.json)
+            else
+              echo "Skipping Android report: failed to parse report JSON output."
+            fi
+          fi
+          if [ -n "${IOS_REPORT_JSON}" ]; then
+            if decode_report ios "${IOS_REPORT_JSON}" artifacts/ios/report.json; then
+              EXPORT_ARGS+=(--ios artifacts/ios/report.json)
+            else
+              echo "Skipping iOS report: failed to parse report JSON output."
+            fi
+          fi
+          if [ "${#EXPORT_ARGS[@]}" -eq 0 ]; then
+            printf 'Agent QA comment was not produced.\n' > artifacts/combined-comment/ci-comment.md
+          else
+            cali export-ci "${EXPORT_ARGS[@]}" --output-dir artifacts/combined-comment
+          fi
+          set-output payload "$(cat artifacts/combined-comment/ci-comment.md)"
 
   qa_comment:
     name: Comment on PR
-    after: [qa_android, qa_ios]
+    after: [compose_comment]
     if: ${{ always() && github.event_name == 'pull_request' }}
     type: github-comment
     params:
-      payload: |
-        ## Agent QA
-
-        | Platform | Status | Issues |
-        | --- | --- | --- |
-        | Android | ${{ after.qa_android.outputs.status_label || '⛔ blocked' }} | ${{ after.qa_android.outputs.top_issue || 'No Android QA report was produced.' }} |
-        | iOS | ${{ after.qa_ios.outputs.status_label || '⛔ blocked' }} | ${{ after.qa_ios.outputs.top_issue || 'No iOS QA report was produced.' }} |
-
-        ### Screenshots
-
-        | Android | iOS |
-        | --- | --- |
-        | ${{ after.qa_android.outputs.screenshots_cell || 'N/A' }} | ${{ after.qa_ios.outputs.screenshots_cell || 'N/A' }} |
-
-        <details>
-        <summary>Full Android Report</summary>
-
-        ${{ after.qa_android.outputs.section_body || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android QA section was produced.\n' }}
-        </details>
-
-        <details>
-        <summary>Full iOS Report</summary>
-
-        ${{ after.qa_ios.outputs.section_body || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n' }}
-        </details>
+      payload: ${{ after.compose_comment.outputs.payload || 'Agent QA comment was not produced.' }}

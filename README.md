@@ -1,12 +1,12 @@
 # EAS agent-device demo
 
-This repo is a minimal Expo + CNG example for running AI-assisted Android and iOS QA on EAS Workflows.
+This repo is a minimal Expo + CNG example for running AI-assisted Android and iOS QA on EAS Workflows with [`cali`](https://github.com/callstackincubator/cali).
 
 ## What it does
 
 - Reuses compatible Android and iOS simulator builds with `fingerprint` + `get-build` + `repack`
 - Falls back to a fresh `build` when the fingerprint changes
-- Runs a small Node.js QA agent built with the AI SDK `ToolLoopAgent`
+- Uses `cali qa` as the mobile QA agent runtime
 - Uses `agent-device` to drive the Android app and iOS simulator, take screenshots, and summarize findings
 - Posts one combined mobile QA summary back to the GitHub pull request with `github-comment`
 - Optionally uploads screenshots to Vercel Blob so the PR comment can link them
@@ -17,7 +17,8 @@ This repo is a minimal Expo + CNG example for running AI-assisted Android and iO
 
 - [eas.json](./eas.json)
 - [.eas/workflows/agent-qa-mobile.yml](./.eas/workflows/agent-qa-mobile.yml)
-- [scripts/agent-qa/index.ts](./scripts/agent-qa/index.ts)
+- [cali.config.json](./cali.config.json)
+- [scripts/agent-qa/run-and-export.sh](./scripts/agent-qa/run-and-export.sh)
 
 ## Required setup
 
@@ -34,38 +35,20 @@ Optional environment variables for the QA job:
 - `QA_MODEL`: Override the default model (`openai/gpt-5.4-mini`)
 - `BLOB_READ_WRITE_TOKEN`: Upload screenshots to Vercel Blob and include public links in the PR comment
 
-## Local smoke test
+The workflow installs the [`agent-device`](https://www.npmjs.com/package/agent-device) skill explicitly in CI with `npx skills add callstackincubator/agent-device --agent codex --skill agent-device -y`, so Cali can discover it from the standard `.agents/skills` location.
 
-```bash
-npm install
-npx tsc --noEmit
-```
+## CI flow
 
-The workflow runner writes `section.md`, `status.txt`, and `report.json` to `artifacts/qa/` during execution. Temporary screenshots are written outside the workspace and uploaded to Vercel Blob when configured.
+The workflow uses `cali qa --ci eas ...` for each platform and then `cali export-ci` to produce:
 
-To execute the runner directly with Node 24, provide the same environment variables the workflow sets:
+- `artifacts/qa/report.json`
+- `artifacts/qa/section.md`
+- `artifacts/qa/status.txt`
+- `artifacts/qa/summary.txt`
+- `artifacts/qa/top-issue.txt`
+- `artifacts/qa/screenshots.md`
+- `artifacts/qa/screenshots.json`
+- `artifacts/qa/ci-comment.md`
+- `artifacts/qa/ci-output.json`
 
-Android:
-
-```bash
-AI_GATEWAY_API_KEY=... \
-QA_PLATFORM=android \
-APP_PATH=/absolute/path/to/app.apk \
-APPLICATION_ID=dev.expo.easagentdevice \
-BUILD_ID=test-build \
-PR_JSON='{"number":1,"title":"Test PR","body":"Smoke test"}' \
-node ./scripts/agent-qa/index.ts
-```
-
-iOS simulator:
-
-```bash
-AI_GATEWAY_API_KEY=... \
-QA_PLATFORM=ios \
-APP_PATH=/absolute/path/to/MyApp.app \
-APPLICATION_ID=dev.expo.easagentdevice \
-AGENT_DEVICE_IOS_DEVICE="iPhone 17" \
-BUILD_ID=test-build \
-PR_JSON='{"number":1,"title":"Test PR","body":"Smoke test"}' \
-node ./scripts/agent-qa/index.ts
-```
+Android and iOS reports are then combined into one PR comment in the final workflow step.
