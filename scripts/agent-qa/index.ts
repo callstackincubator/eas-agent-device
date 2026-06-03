@@ -28,7 +28,11 @@ type ScreenshotLabel = {
 };
 
 type AgentDeviceTraceEntry = {
-  command: string;
+  requestedCommand: string;
+  requestedArgs: string[];
+  normalizedCommand: string;
+  normalizedArgs: string[];
+  executedArgv?: string[];
   ok: boolean;
   exitCode: number;
   stdout: string;
@@ -189,6 +193,30 @@ function rejectBarePressOrClickTarget(
   };
 }
 
+function rejectInvalidCommandName(command: string): CommandResult | null {
+  if (!command.trim()) {
+    return {
+      ok: false,
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'Error (INVALID_ARGS): Missing agent-device command. Use command for the subcommand and args for flags or arguments.',
+    };
+  }
+
+  if (!/\s/.test(command.trim())) {
+    return null;
+  }
+
+  return {
+    ok: false,
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      'Error (INVALID_ARGS): command must be a single agent-device subcommand. Put flags and arguments in args, for example command "snapshot" with args ["-i"].',
+  };
+}
+
 function normalizeAgentDeviceArgs(command: string, args: string[]): string[] {
   if (command === 'help' && args.length === 0) {
     return ['workflow'];
@@ -280,15 +308,24 @@ async function runAgentDeviceCommand(command: string, args: string[] = []): Prom
   stderr: string;
   json: unknown;
 }> {
-  const normalizedArgs = normalizeAgentDeviceArgs(command, args);
+  const normalizedCommand = command.trim();
+  const normalizedArgs = normalizeAgentDeviceArgs(normalizedCommand, args);
+  const argv = [normalizedCommand, ...normalizedArgs];
+  const preflightResult =
+    rejectInvalidCommandName(command) ||
+    rejectBarePressOrClickTarget(normalizedCommand, normalizedArgs);
   const result =
-    rejectBarePressOrClickTarget(command, normalizedArgs) ||
-    (await runCommand(AGENT_DEVICE_BIN, [command, ...normalizedArgs], {
+    preflightResult ||
+    (await runCommand(AGENT_DEVICE_BIN, argv, {
       allowFailure: true,
     }));
 
   agentDeviceTrace.push({
-    command: [command, ...normalizedArgs].join(' '),
+    requestedCommand: command,
+    requestedArgs: args,
+    normalizedCommand,
+    normalizedArgs,
+    ...(preflightResult ? {} : { executedArgv: argv }),
     ok: result.ok,
     exitCode: result.exitCode,
     stdout: trim(result.stdout, 4000),
@@ -685,7 +722,7 @@ async function main(): Promise<void> {
             command: {
               type: 'string',
               description:
-                'The first agent-device subcommand to run, such as help, devices, reinstall, open, snapshot, press, fill, or screenshot.',
+                'Exactly one agent-device subcommand, such as help, devices, reinstall, open, snapshot, press, fill, or screenshot. Do not include flags or arguments here; put them in args.',
             },
             args: {
               type: 'array',
