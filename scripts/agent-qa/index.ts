@@ -58,6 +58,12 @@ type Report = ReportInput & {
   agentDeviceTrace: AgentDeviceTraceEntry[];
 };
 
+const REPORT_STATUSES_REQUIRING_SCREENSHOT: ResultStatus[] = [
+  'passed',
+  'failed',
+  'unsure',
+];
+
 type ParsedPr = {
   number?: number;
   title?: string;
@@ -189,6 +195,10 @@ function normalizeAgentDeviceArgs(command: string, args: string[]): string[] {
   }
 
   return args;
+}
+
+function requiresEvidenceScreenshot(status: ResultStatus): boolean {
+  return REPORT_STATUSES_REQUIRING_SCREENSHOT.includes(status);
 }
 
 function humanizeScreenshotLabel(fileName: string): string {
@@ -571,6 +581,7 @@ function buildPrompt(): string {
     `If appstate reports no tracked foreground app, or a snapshot shows AgentDeviceRunner instead of the app under test, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, and verify again.`,
     'Never save, label, or report AgentDeviceRunner screenshots as app screenshots. If the app under test cannot be foregrounded after one relaunch retry, report overallStatus "blocked" with that foregrounding failure.',
     'When you need to verify that text is actually visible on screen, prefer plain snapshot over snapshot -i. Use snapshot -i mainly for exploration and choosing refs.',
+    `Save at least one screenshot showing a relevant ${context.platformLabel} app screen before writing any passed, failed, or unsure report.`,
     'Use short, descriptive screenshot file names and include matching screenshotLabels with brief route or state labels like Home, Explore, or Welcome screen.',
     'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
     'Do not end with plain text. Your final action must be a write_report tool call.',
@@ -617,7 +628,7 @@ async function main(): Promise<void> {
         ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Do not pass --device, --udid, --serial, or --session in normal app commands.`
         : 'For Android runs, the workflow already booted and bound the emulator.',
       'When verifying whether text is visible on screen, prefer plain snapshot. Use snapshot -i mainly for interactive exploration and choosing refs.',
-      `Take screenshots for meaningful states and save them temporarily in ${SCREENSHOTS_DIR} with .png filenames.`,
+      `Take screenshots for meaningful states and save them temporarily in ${SCREENSHOTS_DIR} with .png filenames. You need at least one screenshot showing a relevant ${context.platformLabel} app screen before writing any passed, failed, or unsure report.`,
       'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
       'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
       'Do not claim success without evidence from tool results.',
@@ -631,7 +642,7 @@ async function main(): Promise<void> {
     ].join(' '),
     toolChoice: 'required',
     prepareStep: async ({ steps, stepNumber }) => {
-      const hasWrittenReport = hasToolActivity(steps, 'write_report');
+      const hasWrittenReport = existsSync(SECTION_PATH);
       const hasUsedDeviceTools = hasToolActivity(steps, 'agent_device');
 
       if (hasWrittenReport || !hasUsedDeviceTools || stepNumber < 6) {
@@ -696,7 +707,7 @@ async function main(): Promise<void> {
       },
       write_report: {
         description:
-          'Persist the final QA summary, findings, and screenshot index to artifacts/qa.',
+          'Persist the final QA summary, findings, and screenshot index to artifacts/qa. Passed, failed, and unsure reports require at least one saved screenshot of a relevant app screen.',
         inputSchema: jsonSchema({
           type: 'object',
           properties: {
@@ -742,7 +753,20 @@ async function main(): Promise<void> {
           required: ['overallStatus', 'summary'],
           additionalProperties: false,
         }),
-        execute: async (input: ReportInput) => persistReport(input),
+        execute: async (input: ReportInput) => {
+          if (
+            requiresEvidenceScreenshot(input.overallStatus) &&
+            (await listScreenshots()).length === 0
+          ) {
+            return {
+              ok: false,
+              error: `Save at least one screenshot showing a relevant ${context.platformLabel} app screen in ${SCREENSHOTS_DIR} before calling write_report for overallStatus "${input.overallStatus}". If screenshots cannot be captured, use overallStatus "blocked" and explain why.`,
+            };
+          }
+
+          await persistReport(input);
+          return { ok: true };
+        },
       },
     },
   });
