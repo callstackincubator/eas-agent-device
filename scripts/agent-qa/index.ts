@@ -96,7 +96,7 @@ const QA_PLATFORM = normalizePlatform(process.env.QA_PLATFORM);
 const APP_PATH = process.env.APP_PATH;
 const BOOTSTRAP_ERROR = process.env.AGENT_QA_BOOTSTRAP_ERROR;
 const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
-const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5.4-mini';
+const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5.5-mini';
 const EMPTY_INPUT_SCHEMA = jsonSchema({
   type: 'object',
   properties: {},
@@ -514,6 +514,9 @@ function buildPrompt(): string {
     platformSpecificFlow,
     `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, call agent-device help before relying on non-trivial CLI behavior, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
     'Use the agent_device tool with command "help" and no args to learn the installed agent-device CLI. You can request focused help by passing args for the relevant topic or subcommand.',
+    `Before taking any screenshot or treating snapshot output as app evidence, verify that the foreground app is the app under test (${context.applicationId}) with appstate or a successful relaunch.`,
+    `If appstate reports no tracked foreground app, or a snapshot shows AgentDeviceRunner instead of the app under test, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, and verify again.`,
+    'Never save, label, or report AgentDeviceRunner screenshots as app screenshots. If the app under test cannot be foregrounded after one relaunch retry, report overallStatus "blocked" with that foregrounding failure.',
     'When you need to verify that text is actually visible on screen, prefer plain snapshot over snapshot -i. Use snapshot -i mainly for exploration and choosing refs.',
     'Use short, descriptive screenshot file names and include matching screenshotLabels with brief route or state labels like Home, Explore, or Welcome screen.',
     'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
@@ -554,6 +557,8 @@ async function main(): Promise<void> {
       'Infer a short list of acceptance criteria from PR metadata, focusing on user-visible behavior.',
       'The workflow has already installed and launched the app before the agent starts.',
       'Before relying on non-trivial agent-device CLI behavior, use the agent_device tool to run agent-device help.',
+      `Your first QA action after help must verify that ${context.applicationId} is foregrounded. Use appstate when possible; if appstate has no tracked foreground app or snapshot shows AgentDeviceRunner, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, then verify again.`,
+      'AgentDeviceRunner is only automation infrastructure. Do not treat it as the app under test, do not screenshot it as evidence, and do not report it as a meaningful app state.',
       context.platform === 'ios'
         ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Do not pass --device, --udid, --serial, or --session in normal app commands.`
         : 'For Android runs, the workflow already booted and bound the emulator.',
