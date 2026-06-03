@@ -96,7 +96,7 @@ const QA_PLATFORM = normalizePlatform(process.env.QA_PLATFORM);
 const APP_PATH = process.env.APP_PATH;
 const BOOTSTRAP_ERROR = process.env.AGENT_QA_BOOTSTRAP_ERROR;
 const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
-const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5-mini';
+const MODEL_ID = process.env.QA_MODEL || 'openai/gpt-5.4-mini';
 const EMPTY_INPUT_SCHEMA = jsonSchema({
   type: 'object',
   properties: {},
