@@ -143,6 +143,54 @@ function trim(value: string, max = 6000): string {
   return `${value.slice(0, max)}\n...<truncated>`;
 }
 
+function isNumericTarget(value: string | undefined): boolean {
+  return Boolean(value?.trim()) && Number.isFinite(Number(value));
+}
+
+function isRefTarget(value: string): boolean {
+  return /^@e\d+$/.test(value.trim());
+}
+
+function isSelectorTarget(value: string): boolean {
+  return /\b(?:id|label|role|value|text|placeholder|name|testID|testId|identifier)=["'][^"']+["']/.test(
+    value,
+  );
+}
+
+function rejectBarePressOrClickTarget(
+  command: string,
+  args: string[],
+): CommandResult | null {
+  if (command !== 'press' && command !== 'click') {
+    return null;
+  }
+
+  const target = args.join(' ').trim();
+  if (
+    isNumericTarget(args[0]) && isNumericTarget(args[1]) ||
+    isRefTarget(target) ||
+    isSelectorTarget(target)
+  ) {
+    return null;
+  }
+
+  return {
+    ok: false,
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      'Error (INVALID_ARGS): Bare labels are not valid targets; use @eN from snapshot or label="...".',
+  };
+}
+
+function normalizeAgentDeviceArgs(command: string, args: string[]): string[] {
+  if (command === 'help' && args.length === 0) {
+    return ['workflow'];
+  }
+
+  return args;
+}
+
 function humanizeScreenshotLabel(fileName: string): string {
   const stem = fileName.replace(/\.[^.]+$/, '');
   const words = stem
@@ -222,12 +270,15 @@ async function runAgentDeviceCommand(command: string, args: string[] = []): Prom
   stderr: string;
   json: unknown;
 }> {
-  const result = await runCommand(AGENT_DEVICE_BIN, [command, ...args], {
-    allowFailure: true,
-  });
+  const normalizedArgs = normalizeAgentDeviceArgs(command, args);
+  const result =
+    rejectBarePressOrClickTarget(command, normalizedArgs) ||
+    (await runCommand(AGENT_DEVICE_BIN, [command, ...normalizedArgs], {
+      allowFailure: true,
+    }));
 
   agentDeviceTrace.push({
-    command: [command, ...args].join(' '),
+    command: [command, ...normalizedArgs].join(' '),
     ok: result.ok,
     exitCode: result.exitCode,
     stdout: trim(result.stdout, 4000),
@@ -512,8 +563,10 @@ function buildPrompt(): string {
     `- Temporary screenshot directory: ${SCREENSHOTS_DIR}`,
     '',
     platformSpecificFlow,
-    `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, call agent-device help before relying on non-trivial CLI behavior, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
-    'Use the agent_device tool with command "help" and no args to learn the installed agent-device CLI. You can request focused help by passing args for the relevant topic or subcommand.',
+    `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, call agent-device help workflow before relying on non-trivial CLI behavior, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
+    'Use the agent_device tool with command "help" and args ["workflow"] to learn the installed agent-device CLI workflow before interacting with the app.',
+    'When snapshot output contains @eN refs, interact with the exact ref. Never pass bare visible label text to press/click; use @eN or a formal selector like label="...".',
+    'Interaction usage: press <x y|@ref|selector>; click <x y|@ref|selector>; fill <x y|@ref|selector> <text>; longpress <x y|@ref|selector> [durationMs].',
     `Before taking any screenshot or treating snapshot output as app evidence, verify that the foreground app is the app under test (${context.applicationId}) with appstate or a successful relaunch.`,
     `If appstate reports no tracked foreground app, or a snapshot shows AgentDeviceRunner instead of the app under test, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, and verify again.`,
     'Never save, label, or report AgentDeviceRunner screenshots as app screenshots. If the app under test cannot be foregrounded after one relaunch retry, report overallStatus "blocked" with that foregrounding failure.',
@@ -556,7 +609,8 @@ async function main(): Promise<void> {
       'Treat the app and repository as a black box.',
       'Infer a short list of acceptance criteria from PR metadata, focusing on user-visible behavior.',
       'The workflow has already installed and launched the app before the agent starts.',
-      'Before relying on non-trivial agent-device CLI behavior, use the agent_device tool to run agent-device help.',
+      'Before relying on non-trivial agent-device CLI behavior, use the agent_device tool to run agent-device help workflow.',
+      'When snapshot output contains @eN, interact with the exact ref. Never pass bare visible label text to press/click; use @eN or a formal selector like label="...".',
       `Your first QA action after help must verify that ${context.applicationId} is foregrounded. Use appstate when possible; if appstate has no tracked foreground app or snapshot shows AgentDeviceRunner, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, then verify again.`,
       'AgentDeviceRunner is only automation infrastructure. Do not treat it as the app under test, do not screenshot it as evidence, and do not report it as a meaningful app state.',
       context.platform === 'ios'
@@ -613,20 +667,20 @@ async function main(): Promise<void> {
       },
       agent_device: {
         description:
-          'Run an agent-device command for mobile UI automation and screenshot capture.',
+          'Run an agent-device command for mobile UI automation and screenshot capture. Use help workflow first. For interactions, use press <x y|@ref|selector>, click <x y|@ref|selector>, fill <x y|@ref|selector> <text>, and never use bare visible label text as a target.',
         inputSchema: jsonSchema({
           type: 'object',
           properties: {
             command: {
               type: 'string',
               description:
-                'The first agent-device subcommand to run, such as devices, reinstall, open, snapshot, press, fill, or screenshot.',
+                'The first agent-device subcommand to run, such as help, devices, reinstall, open, snapshot, press, fill, or screenshot.',
             },
             args: {
               type: 'array',
               items: { type: 'string' },
               description:
-                `Remaining CLI arguments. Use ${SCREENSHOTS_DIR}/*.png for screenshots.`,
+                `Remaining CLI arguments. Use ["workflow"] for help workflow. Use ${SCREENSHOTS_DIR}/*.png for screenshots. press/click targets must be x y coordinates, @eN refs, or formal selectors like label="..."; bare labels are invalid.`,
             },
           },
           required: ['command'],
