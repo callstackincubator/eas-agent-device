@@ -620,6 +620,7 @@ function buildPrompt(): string {
     'When you need to verify that text is actually visible on screen, prefer plain snapshot over snapshot -i. Use snapshot -i mainly for exploration and choosing refs.',
     `Save at least one screenshot showing a relevant ${context.platformLabel} app screen before writing any passed, failed, or unsure report.`,
     'Use short, descriptive screenshot file names and include matching screenshotLabels with brief route or state labels like Home, Explore, or Welcome screen.',
+    'Note any visual inconsistencies, incomplete elements, clipping, overflow, overlap, truncation, or unexpected spacing, even if the main requested change appears to work.',
     'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
     'Do not end with plain text. Your final action must be a write_report tool call.',
   ].join('\n');
@@ -671,6 +672,7 @@ async function main(): Promise<void> {
       'Do not claim success without evidence from tool results.',
       'The workflow pre-binds the mobile target. Avoid explicit routing flags like --device, --udid, --serial, or --session in normal app commands unless you are inspecting device inventory.',
       'When you save screenshots, use short descriptive file names and include matching screenshotLabels in write_report so the PR comment can label them clearly.',
+      'Also inspect screenshots for visual inconsistencies, incomplete elements, clipping, overflow, overlap, truncation, and unexpected spacing.',
       'If text-based automation evidence is inconclusive but screenshots likely show the relevant UI, report overallStatus as unsure.',
       'If a prerequisite is missing or the environment is broken, mark the relevant checks as blocked.',
       'When you are done with the simulator or emulator session, prefer close --shutdown.',
