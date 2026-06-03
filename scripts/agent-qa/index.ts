@@ -9,13 +9,6 @@ import { promisify } from 'node:util';
 import { put } from '@vercel/blob';
 import { ToolLoopAgent, gateway, jsonSchema } from 'ai';
 
-type SkillMetadata = {
-  name: string;
-  description: string;
-  directoryPath: string;
-  skillFilePath: string;
-};
-
 type QaPlatform = 'android' | 'ios';
 
 type ScreenshotInfo = {
@@ -109,10 +102,6 @@ const EMPTY_INPUT_SCHEMA = jsonSchema({
   properties: {},
   additionalProperties: false,
 });
-const SKILL_DIRECTORIES = [
-  path.join(ROOT_DIR, 'node_modules', 'agent-device', 'skills'),
-];
-
 const pr = parseJson<ParsedPr>(process.env.PR_JSON, {});
 const context = {
   platform: QA_PLATFORM,
@@ -161,126 +150,6 @@ function humanizeScreenshotLabel(fileName: string): string {
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1));
   return words.join(' ') || fileName;
-}
-
-function stripFrontmatter(content: string): string {
-  const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
-  return match ? content.slice(match[0].length).trim() : content.trim();
-}
-
-function parseFrontmatter(content: string): {
-  name: string;
-  description: string;
-} {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match?.[1]) {
-    throw new Error('No frontmatter found');
-  }
-
-  const frontmatter = match[1];
-  const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
-  const descriptionMatch = frontmatter.match(/^description:\s*(.+)$/m);
-  const name = nameMatch?.[1]?.trim().replace(/^['"]|['"]$/g, '');
-  const description = descriptionMatch?.[1]
-    ?.trim()
-    .replace(/^['"]|['"]$/g, '');
-
-  if (!name || !description) {
-    throw new Error('Skill frontmatter is missing name or description');
-  }
-
-  return { name, description };
-}
-
-async function discoverSkills(directories: string[]): Promise<SkillMetadata[]> {
-  const skills: SkillMetadata[] = [];
-  const seenNames = new Set<string>();
-
-  for (const directory of directories) {
-    let entries;
-    try {
-      entries = await readdir(directory, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-
-      const skillDirectoryPath = path.join(directory, entry.name);
-      const skillFilePath = path.join(skillDirectoryPath, 'SKILL.md');
-
-      try {
-        const content = await readFile(skillFilePath, 'utf8');
-        const frontmatter = parseFrontmatter(content);
-
-        if (seenNames.has(frontmatter.name.toLowerCase())) {
-          continue;
-        }
-
-        seenNames.add(frontmatter.name.toLowerCase());
-        skills.push({
-          name: frontmatter.name,
-          description: frontmatter.description,
-          directoryPath: skillDirectoryPath,
-          skillFilePath,
-        });
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  return skills.sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function buildSkillsPrompt(skills: SkillMetadata[]): string {
-  if (skills.length === 0) {
-    return 'No local skills were discovered for this run.';
-  }
-
-  const skillList = skills
-    .map((skill) => `- ${skill.name}: ${skill.description}`)
-    .join('\n');
-
-  return [
-    'Available local skills:',
-    skillList,
-    '',
-    'Load a skill before relying on its instructions. Use read_skill_file only for files inside the loaded skill directory.',
-  ].join('\n');
-}
-
-function findSkill(skills: SkillMetadata[], name: string): SkillMetadata {
-  const skill = skills.find(
-    (candidate) => candidate.name.toLowerCase() === name.toLowerCase(),
-  );
-
-  if (!skill) {
-    throw new Error(`Skill not found: ${name}`);
-  }
-
-  return skill;
-}
-
-function resolveSkillFilePath(skill: SkillMetadata, relativeFilePath: string): string {
-  const absolutePath = path.resolve(skill.directoryPath, relativeFilePath);
-  const relativePath = path.relative(skill.directoryPath, absolutePath);
-  const normalizedRelativePath = relativePath.split(path.sep).join('/');
-
-  if (
-    normalizedRelativePath === '' ||
-    normalizedRelativePath.startsWith('../') ||
-    normalizedRelativePath === '..'
-  ) {
-    throw new Error(
-      `Refusing to read a path outside the skill directory: ${relativeFilePath}`,
-    );
-  }
-
-  return absolutePath;
 }
 
 function ensureRequiredAgentQaEnvs(): void {
@@ -614,7 +483,7 @@ function renderPlatformSection(report: Report): string {
   return `${lines.join('\n')}\n`;
 }
 
-function buildPrompt(skills: SkillMetadata[]): string {
+function buildPrompt(): string {
   const prTitle = pr.title || 'Untitled PR';
   const prBody = pr.body || 'No PR body was provided.';
   const platformSpecificContext =
@@ -642,10 +511,9 @@ function buildPrompt(skills: SkillMetadata[]): string {
     `- Workflow URL: ${context.workflowUrl || 'n/a'}`,
     `- Temporary screenshot directory: ${SCREENSHOTS_DIR}`,
     '',
-    buildSkillsPrompt(skills),
-    '',
     platformSpecificFlow,
-    `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, load the relevant local skill before relying on it, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
+    `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, call agent-device help before relying on non-trivial CLI behavior, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
+    'Use the agent_device tool with command "help" and no args to learn the installed agent-device CLI. You can request focused help by passing args for the relevant topic or subcommand.',
     'When you need to verify that text is actually visible on screen, prefer plain snapshot over snapshot -i. Use snapshot -i mainly for exploration and choosing refs.',
     'Use short, descriptive screenshot file names and include matching screenshotLabels with brief route or state labels like Home, Explore, or Welcome screen.',
     'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
@@ -677,7 +545,6 @@ async function main(): Promise<void> {
     await writeBlockedReport(new Error(BOOTSTRAP_ERROR));
     return;
   }
-  const skills = await discoverSkills(SKILL_DIRECTORIES);
 
   const agent = new ToolLoopAgent({
     model: gateway(MODEL_ID),
@@ -686,7 +553,7 @@ async function main(): Promise<void> {
       'Treat the app and repository as a black box.',
       'Infer a short list of acceptance criteria from PR metadata, focusing on user-visible behavior.',
       'The workflow has already installed and launched the app before the agent starts.',
-      'Use the local skills list in the prompt. Load a relevant skill before making non-trivial command choices.',
+      'Before relying on non-trivial agent-device CLI behavior, use the agent_device tool to run agent-device help.',
       context.platform === 'ios'
         ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Do not pass --device, --udid, --serial, or --session in normal app commands.`
         : 'For Android runs, the workflow already booted and bound the emulator.',
@@ -738,91 +605,6 @@ async function main(): Promise<void> {
           applicationId: context.applicationId,
           deviceName: context.deviceName,
         }),
-      },
-      load_skill: {
-        description:
-          'Load a local skill and return its instructions plus the skill directory path.',
-        inputSchema: jsonSchema({
-          type: 'object',
-          properties: {
-            name: {
-              type: 'string',
-              description: 'Skill name from the available local skills list.',
-            },
-          },
-          required: ['name'],
-          additionalProperties: false,
-        }),
-        execute: async ({ name }: { name: string }) => {
-          const skill = findSkill(skills, name);
-          const content = await readFile(skill.skillFilePath, 'utf8');
-          return {
-            name: skill.name,
-            description: skill.description,
-            skillDirectory: skill.directoryPath,
-            skillFilePath: skill.skillFilePath,
-            content: stripFrontmatter(content),
-          };
-        },
-      },
-      read_skill_file: {
-        description:
-          'Read a text file inside a loaded skill directory, such as references or scripts.',
-        inputSchema: jsonSchema({
-          type: 'object',
-          properties: {
-            skillName: {
-              type: 'string',
-              description: 'Skill name from the available local skills list.',
-            },
-            path: {
-              type: 'string',
-              description:
-                'Path relative to the skill directory, such as references/foo.md.',
-            },
-            startLine: {
-              type: 'integer',
-              minimum: 1,
-              description: '1-based line number to start reading from.',
-            },
-            maxLines: {
-              type: 'integer',
-              minimum: 1,
-              maximum: 400,
-              description: 'Maximum number of lines to read.',
-            },
-          },
-          required: ['skillName', 'path'],
-          additionalProperties: false,
-        }),
-        execute: async ({
-          skillName,
-          path: relativeFilePath,
-          startLine = 1,
-          maxLines = 200,
-        }: {
-          skillName: string;
-          path: string;
-          startLine?: number;
-          maxLines?: number;
-        }) => {
-          const skill = findSkill(skills, skillName);
-          const absolutePath = resolveSkillFilePath(skill, relativeFilePath);
-          const content = await readFile(absolutePath, 'utf8');
-          const lines = content.split('\n');
-          const slice = lines.slice(
-            Math.max(startLine - 1, 0),
-            Math.max(startLine - 1, 0) + maxLines,
-          );
-
-          return {
-            skillName: skill.name,
-            absolutePath,
-            startLine,
-            endLine: startLine + slice.length - 1,
-            content: slice.join('\n'),
-          };
-        },
       },
       agent_device: {
         description:
@@ -907,7 +689,7 @@ async function main(): Promise<void> {
   });
 
   const result = await agent.generate({
-    prompt: buildPrompt(skills),
+    prompt: buildPrompt(),
   });
 
   if (result.text) {
