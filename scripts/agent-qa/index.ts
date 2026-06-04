@@ -28,7 +28,11 @@ type ScreenshotLabel = {
 };
 
 type AgentDeviceTraceEntry = {
-  command: string;
+  requestedCommand: string;
+  requestedArgs: string[];
+  normalizedCommand: string;
+  normalizedArgs: string[];
+  executedArgv?: string[];
   ok: boolean;
   exitCode: number;
   stdout: string;
@@ -57,6 +61,12 @@ type Report = ReportInput & {
   screenshots: ScreenshotInfo[];
   agentDeviceTrace: AgentDeviceTraceEntry[];
 };
+
+const REPORT_STATUSES_REQUIRING_SCREENSHOT: ResultStatus[] = [
+  'passed',
+  'failed',
+  'unsure',
+];
 
 type ParsedPr = {
   number?: number;
@@ -143,6 +153,82 @@ function trim(value: string, max = 6000): string {
   return `${value.slice(0, max)}\n...<truncated>`;
 }
 
+function isNumericTarget(value: string | undefined): boolean {
+  return Boolean(value?.trim()) && Number.isFinite(Number(value));
+}
+
+function isRefTarget(value: string): boolean {
+  return /^@e\d+$/.test(value.trim());
+}
+
+function isSelectorTarget(value: string): boolean {
+  return /\b(?:id|label|role|value|text|placeholder|name|testID|testId|identifier)=["'][^"']+["']/.test(
+    value,
+  );
+}
+
+function rejectBarePressOrClickTarget(
+  command: string,
+  args: string[],
+): CommandResult | null {
+  if (command !== 'press' && command !== 'click') {
+    return null;
+  }
+
+  const target = args.join(' ').trim();
+  if (
+    isNumericTarget(args[0]) && isNumericTarget(args[1]) ||
+    isRefTarget(target) ||
+    isSelectorTarget(target)
+  ) {
+    return null;
+  }
+
+  return {
+    ok: false,
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      'Error (INVALID_ARGS): Bare labels are not valid targets; use @eN from snapshot or label="...".',
+  };
+}
+
+function rejectInvalidCommandName(command: string): CommandResult | null {
+  if (!command.trim()) {
+    return {
+      ok: false,
+      exitCode: 1,
+      stdout: '',
+      stderr:
+        'Error (INVALID_ARGS): Missing agent-device command. Use command for the subcommand and args for flags or arguments.',
+    };
+  }
+
+  if (!/\s/.test(command.trim())) {
+    return null;
+  }
+
+  return {
+    ok: false,
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      'Error (INVALID_ARGS): command must be a single agent-device subcommand. Put flags and arguments in args, for example command "snapshot" with args ["-i"].',
+  };
+}
+
+function normalizeAgentDeviceArgs(command: string, args: string[]): string[] {
+  if (command === 'help' && args.length === 0) {
+    return ['workflow'];
+  }
+
+  return args;
+}
+
+function requiresEvidenceScreenshot(status: ResultStatus): boolean {
+  return REPORT_STATUSES_REQUIRING_SCREENSHOT.includes(status);
+}
+
 function humanizeScreenshotLabel(fileName: string): string {
   const stem = fileName.replace(/\.[^.]+$/, '');
   const words = stem
@@ -222,12 +308,24 @@ async function runAgentDeviceCommand(command: string, args: string[] = []): Prom
   stderr: string;
   json: unknown;
 }> {
-  const result = await runCommand(AGENT_DEVICE_BIN, [command, ...args], {
-    allowFailure: true,
-  });
+  const normalizedCommand = command.trim();
+  const normalizedArgs = normalizeAgentDeviceArgs(normalizedCommand, args);
+  const argv = [normalizedCommand, ...normalizedArgs];
+  const preflightResult =
+    rejectInvalidCommandName(command) ||
+    rejectBarePressOrClickTarget(normalizedCommand, normalizedArgs);
+  const result =
+    preflightResult ||
+    (await runCommand(AGENT_DEVICE_BIN, argv, {
+      allowFailure: true,
+    }));
 
   agentDeviceTrace.push({
-    command: [command, ...args].join(' '),
+    requestedCommand: command,
+    requestedArgs: args,
+    normalizedCommand,
+    normalizedArgs,
+    ...(preflightResult ? {} : { executedArgv: argv }),
     ok: result.ok,
     exitCode: result.exitCode,
     stdout: trim(result.stdout, 4000),
@@ -512,12 +610,15 @@ function buildPrompt(): string {
     `- Temporary screenshot directory: ${SCREENSHOTS_DIR}`,
     '',
     platformSpecificFlow,
-    `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, call agent-device help before relying on non-trivial CLI behavior, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
-    'Use the agent_device tool with command "help" and no args to learn the installed agent-device CLI. You can request focused help by passing args for the relevant topic or subcommand.',
+    `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flows, call agent-device help workflow before relying on non-trivial CLI behavior, save temporary screenshots into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
+    'Use the agent_device tool with command "help" and args ["workflow"] to learn the installed agent-device CLI workflow before interacting with the app.',
+    'When snapshot output contains @eN refs, interact with the exact ref. Never pass bare visible label text to press/click; use @eN or a formal selector like label="...".',
+    'Interaction usage: press <x y|@ref|selector>; click <x y|@ref|selector>; fill <x y|@ref|selector> <text>; longpress <x y|@ref|selector> [durationMs].',
     `Before taking any screenshot or treating snapshot output as app evidence, verify that the foreground app is the app under test (${context.applicationId}) with appstate or a successful relaunch.`,
     `If appstate reports no tracked foreground app, or a snapshot shows AgentDeviceRunner instead of the app under test, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, and verify again.`,
     'Never save, label, or report AgentDeviceRunner screenshots as app screenshots. If the app under test cannot be foregrounded after one relaunch retry, report overallStatus "blocked" with that foregrounding failure.',
     'When you need to verify that text is actually visible on screen, prefer plain snapshot over snapshot -i. Use snapshot -i mainly for exploration and choosing refs.',
+    `Save at least one screenshot showing a relevant ${context.platformLabel} app screen before writing any passed, failed, or unsure report.`,
     'Use short, descriptive screenshot file names and include matching screenshotLabels with brief route or state labels like Home, Explore, or Welcome screen.',
     'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
     'Do not end with plain text. Your final action must be a write_report tool call.',
@@ -556,14 +657,15 @@ async function main(): Promise<void> {
       'Treat the app and repository as a black box.',
       'Infer a short list of acceptance criteria from PR metadata, focusing on user-visible behavior.',
       'The workflow has already installed and launched the app before the agent starts.',
-      'Before relying on non-trivial agent-device CLI behavior, use the agent_device tool to run agent-device help.',
+      'Before relying on non-trivial agent-device CLI behavior, use the agent_device tool to run agent-device help workflow.',
+      'When snapshot output contains @eN, interact with the exact ref. Never pass bare visible label text to press/click; use @eN or a formal selector like label="...".',
       `Your first QA action after help must verify that ${context.applicationId} is foregrounded. Use appstate when possible; if appstate has no tracked foreground app or snapshot shows AgentDeviceRunner, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, then verify again.`,
       'AgentDeviceRunner is only automation infrastructure. Do not treat it as the app under test, do not screenshot it as evidence, and do not report it as a meaningful app state.',
       context.platform === 'ios'
         ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Do not pass --device, --udid, --serial, or --session in normal app commands.`
         : 'For Android runs, the workflow already booted and bound the emulator.',
       'When verifying whether text is visible on screen, prefer plain snapshot. Use snapshot -i mainly for interactive exploration and choosing refs.',
-      `Take screenshots for meaningful states and save them temporarily in ${SCREENSHOTS_DIR} with .png filenames.`,
+      `Take screenshots for meaningful states and save them temporarily in ${SCREENSHOTS_DIR} with .png filenames. You need at least one screenshot showing a relevant ${context.platformLabel} app screen before writing any passed, failed, or unsure report.`,
       'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
       'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
       'Do not claim success without evidence from tool results.',
@@ -577,7 +679,7 @@ async function main(): Promise<void> {
     ].join(' '),
     toolChoice: 'required',
     prepareStep: async ({ steps, stepNumber }) => {
-      const hasWrittenReport = hasToolActivity(steps, 'write_report');
+      const hasWrittenReport = existsSync(SECTION_PATH);
       const hasUsedDeviceTools = hasToolActivity(steps, 'agent_device');
 
       if (hasWrittenReport || !hasUsedDeviceTools || stepNumber < 6) {
@@ -613,20 +715,20 @@ async function main(): Promise<void> {
       },
       agent_device: {
         description:
-          'Run an agent-device command for mobile UI automation and screenshot capture.',
+          'Run an agent-device command for mobile UI automation and screenshot capture. Use help workflow first. For interactions, use press <x y|@ref|selector>, click <x y|@ref|selector>, fill <x y|@ref|selector> <text>, and never use bare visible label text as a target.',
         inputSchema: jsonSchema({
           type: 'object',
           properties: {
             command: {
               type: 'string',
               description:
-                'The first agent-device subcommand to run, such as devices, reinstall, open, snapshot, press, fill, or screenshot.',
+                'Exactly one agent-device subcommand, such as help, devices, reinstall, open, snapshot, press, fill, or screenshot. Do not include flags or arguments here; put them in args.',
             },
             args: {
               type: 'array',
               items: { type: 'string' },
               description:
-                `Remaining CLI arguments. Use ${SCREENSHOTS_DIR}/*.png for screenshots.`,
+                `Remaining CLI arguments. Use ["workflow"] for help workflow. Use ${SCREENSHOTS_DIR}/*.png for screenshots. press/click targets must be x y coordinates, @eN refs, or formal selectors like label="..."; bare labels are invalid.`,
             },
           },
           required: ['command'],
@@ -642,7 +744,7 @@ async function main(): Promise<void> {
       },
       write_report: {
         description:
-          'Persist the final QA summary, findings, and screenshot index to artifacts/qa.',
+          'Persist the final QA summary, findings, and screenshot index to artifacts/qa. Passed, failed, and unsure reports require at least one saved screenshot of a relevant app screen.',
         inputSchema: jsonSchema({
           type: 'object',
           properties: {
@@ -688,7 +790,20 @@ async function main(): Promise<void> {
           required: ['overallStatus', 'summary'],
           additionalProperties: false,
         }),
-        execute: async (input: ReportInput) => persistReport(input),
+        execute: async (input: ReportInput) => {
+          if (
+            requiresEvidenceScreenshot(input.overallStatus) &&
+            (await listScreenshots()).length === 0
+          ) {
+            return {
+              ok: false,
+              error: `Save at least one screenshot showing a relevant ${context.platformLabel} app screen in ${SCREENSHOTS_DIR} before calling write_report for overallStatus "${input.overallStatus}". If screenshots cannot be captured, use overallStatus "blocked" and explain why.`,
+            };
+          }
+
+          await persistReport(input);
+          return { ok: true };
+        },
       },
     },
   });
