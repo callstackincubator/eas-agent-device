@@ -13,7 +13,7 @@ import {
   ensureRequiredAgentQaEnvs,
   trim,
   writeBlockedReport,
-} from "./eve/agent/lib/qa-runtime.js";
+} from "./eve/agent/lib/qa-runtime.ts";
 
 type EveClientModule = typeof import("./eve/node_modules/eve/dist/src/client/index.js");
 
