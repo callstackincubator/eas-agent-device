@@ -9,7 +9,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "agent-qa": "node ./scripts/agent-qa/index.ts"
+    "agent-qa": "node ./scripts/agent-qa/index.ts",
+    "agent-qa:check": "node ./scripts/agent-qa/check.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
