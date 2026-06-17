@@ -29,6 +29,7 @@ const SERVER_READY_TIMEOUT_MS = Number(
   process.env.AGENT_QA_EVE_READY_TIMEOUT_MS || 60_000,
 );
 const EVE_PACKAGE_PATH = path.join(EVE_DIR, "node_modules", "eve", "package.json");
+const EVE_BIN_PATH = path.join(EVE_DIR, "node_modules", "eve", "bin", "eve.js");
 const MODEL_ID = process.env.QA_MODEL || "openai/gpt-5.4-mini";
 const BOOTSTRAP_ERROR = process.env.AGENT_QA_BOOTSTRAP_ERROR;
 const pr = parseJson<ParsedPr>(process.env.PR_JSON, {});
@@ -186,8 +187,17 @@ function resolveNpmCommand(): string {
 }
 
 function spawnNpm(args: string[]): ChildProcess {
-  const child = spawn(resolveNpmCommand(), args, {
-    cwd: EVE_DIR,
+  return spawnLogged(resolveNpmCommand(), args, { cwd: EVE_DIR });
+}
+
+function spawnLogged(
+  command: string,
+  args: string[],
+  options: { cwd: string; detached?: boolean },
+): ChildProcess {
+  const child = spawn(command, args, {
+    cwd: options.cwd,
+    detached: options.detached,
     env: buildServerEnv(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -231,19 +241,76 @@ async function ensureEveDependencies(): Promise<void> {
 }
 
 function startEveServer(): ChildProcess {
-  return spawnNpm([
-    "exec",
-    "--",
-    "eve",
-    "dev",
-    "--no-ui",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    String(EVE_PORT),
-    "--logs",
-    "stderr",
+  return spawnLogged(
+    process.execPath,
+    [
+      EVE_BIN_PATH,
+      "dev",
+      "--no-ui",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(EVE_PORT),
+      "--logs",
+      "stderr",
+    ],
+    {
+      cwd: EVE_DIR,
+      detached: process.platform !== "win32",
+    },
+  );
+}
+
+function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid && process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to signaling the direct child below.
+    }
+  }
+
+  child.kill(signal);
+}
+
+async function waitForProcessExit(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<"exit" | "timeout"> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return "exit";
+  }
+
+  return Promise.race([
+    new Promise<"exit">((resolve) => {
+      child.once("exit", () => resolve("exit"));
+    }),
+    new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), timeoutMs);
+    }),
   ]);
+}
+
+/*
+ * eve dev can leave the Nitro server alive if only an npm wrapper process is
+ * killed. The server is started as its own process group so CI can always
+ * tear down the whole tree before exporting workflow outputs.
+ */
+async function stopEveServer(child: ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+
+  signalProcessTree(child, "SIGTERM");
+
+  if ((await waitForProcessExit(child, 5_000)) === "timeout") {
+    signalProcessTree(child, "SIGKILL");
+    await waitForProcessExit(child, 2_000);
+  }
+
+  child.stdout?.destroy();
+  child.stderr?.destroy();
 }
 
 async function waitForEveServer(child: ChildProcess) {
@@ -276,28 +343,6 @@ async function waitForEveServer(child: ChildProcess) {
   throw new Error(
     `Timed out waiting ${SERVER_READY_TIMEOUT_MS}ms for Eve server at ${EVE_HOST}.`,
   );
-}
-
-async function stopEveServer(child: ChildProcess) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-
-  child.kill("SIGTERM");
-
-  await Promise.race([
-    new Promise<void>((resolve) => {
-      child.once("exit", () => resolve());
-    }),
-    new Promise<void>((resolve) => {
-      setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
-        }
-        resolve();
-      }, 5_000);
-    }),
-  ]);
 }
 
 async function loadEveClient(): Promise<EveClientModule> {
