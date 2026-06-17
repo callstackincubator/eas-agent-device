@@ -67,7 +67,20 @@ const REPORT_STATUSES_REQUIRING_SCREENSHOT: ResultStatus[] = [
   'failed',
   'unsure',
 ];
-const MIN_SCREENSHOTS_BEFORE_FORCED_REPORT = 2;
+const MIN_SCREENSHOTS_BEFORE_FORCED_REPORT = 1;
+const UI_CHANGING_AGENT_DEVICE_COMMANDS = new Set([
+  'back',
+  'click',
+  'fill',
+  'gesture',
+  'longpress',
+  'open',
+  'press',
+  'scroll',
+  'swipe',
+  'type',
+  'wait',
+]);
 
 type ParsedPr = {
   number?: number;
@@ -591,7 +604,7 @@ function buildPrompt(): string {
       : [`- Preferred Android device: ${context.deviceName || 'n/a'}`];
   const platformSpecificFlow =
     context.platform === 'ios'
-      ? `For iOS simulator runs, the workflow already booted the app on ${context.deviceName}. Do not pass --device, --udid, or --session in normal app commands.`
+      ? `For iOS simulator runs, the workflow already booted the app on ${context.deviceName}. Normal app commands can use the pre-bound simulator without --device, --udid, or --session.`
       : `For Android runs, the workflow already booted the app on ${context.deviceName || 'the booted emulator'}.`;
 
   return [
@@ -611,22 +624,18 @@ function buildPrompt(): string {
     `- Temporary screenshot directory: ${SCREENSHOTS_DIR}`,
     '',
     platformSpecificFlow,
-    `You must infer concise acceptance criteria from the PR, test only the highest-signal ${context.platformLabel} flow, save a short screenshot trail into ${SCREENSHOTS_DIR}/*.png, and call write_report exactly once before finishing.`,
-    'Use the agent_device tool with command "help" and args ["workflow"] to learn the installed agent-device CLI workflow before interacting with the app.',
-    'When snapshot output contains @eN refs, interact with the exact ref. Never pass bare visible label text to press/click; use @eN or a formal selector like label="...".',
-    'Interaction usage: press <x y|@ref|selector>; click <x y|@ref|selector>; fill <x y|@ref|selector> <text>; longpress <x y|@ref|selector> [durationMs].',
-    `Before taking any screenshot or treating snapshot output as app evidence, verify that the foreground app is the app under test (${context.applicationId}) with appstate or a successful relaunch.`,
-    `If appstate reports no tracked foreground app, or a snapshot shows AgentDeviceRunner instead of the app under test, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, and verify again.`,
-    'Never save, label, or report AgentDeviceRunner screenshots as app screenshots. If the app under test cannot be foregrounded after one relaunch retry, report overallStatus "blocked" with that foregrounding failure.',
-    'When you need to verify that text is actually visible on screen, prefer plain snapshot over snapshot -i. Use snapshot -i mainly for exploration and choosing refs.',
-    `Save 2-4 screenshots for the shortest useful path you test. Prefer one before the feature action and one on the final feature state.`,
-    `Snapshots are text evidence, not screenshot evidence. Save visual evidence with agent_device command "screenshot" and args like ["${path.join(SCREENSHOTS_DIR, `${context.platform}-feature-screen.png`)}"].`,
-    'Use short, descriptive screenshot file names and include matching screenshotLabels for every screenshot in write_report.',
-    'Use accessibility snapshots for semantic checks. For screenshots already captured as evidence, briefly inspect the image for obvious visual issues such as clipping, overflow, overlap, truncation, partial elements, or unsafe edge spacing.',
-    'Do not rely only on accessibility text for visual consistency claims.',
-    'If the accessibility tree or snapshot text is inconclusive but the screenshots likely show the changed UI, use overallStatus "unsure" instead of "blocked" or "failed".',
-    'Use overallStatus "blocked" only for real prerequisites or environment/tool failures. Do not report blocked because the session feels stale if the app was observable.',
-    'Do not end with plain text. Your final action must be a write_report tool call.',
+    'Task flow:',
+    '1. Infer concise acceptance criteria from the PR metadata.',
+    '2. Use agent_device help workflow, then verify the app under test is foregrounded.',
+    `3. Exercise the shortest high-signal ${context.platformLabel} path that proves the user-visible change.`,
+    '4. Capture screenshots only when they show distinct, relevant states.',
+    '5. Finish with exactly one write_report call.',
+    '',
+    'Screenshot examples:',
+    `- New tab or navigation: capture the source screen before pressing the target, then capture the destination screen after the transition.`,
+    '- Single screen already showing the changed UI: one final-state screenshot is enough.',
+    '- Scrollable changed screen: capture the top state, then scroll and capture the below-the-fold state when that content matters.',
+    '- Use labels that describe the visible state, such as "Home before Ship tab", "Ship screen", or "Ship screen scrolled".',
   ].join('\n');
 }
 
@@ -701,6 +710,37 @@ function getMissingScreenshotLabels(
     .filter((fileName) => !labeledFiles.has(fileName));
 }
 
+function getUnseparatedScreenshotPair(): [string, string] | null {
+  let lastScreenshotFileName: string | null = null;
+  let hasUiChangeSinceLastScreenshot = false;
+
+  for (const entry of agentDeviceTrace) {
+    if (!entry.ok) {
+      continue;
+    }
+
+    if (entry.normalizedCommand === 'screenshot') {
+      const currentScreenshotFileName = path.basename(
+        entry.normalizedArgs[0] || 'unknown screenshot',
+      );
+
+      if (lastScreenshotFileName && !hasUiChangeSinceLastScreenshot) {
+        return [lastScreenshotFileName, currentScreenshotFileName];
+      }
+
+      lastScreenshotFileName = currentScreenshotFileName;
+      hasUiChangeSinceLastScreenshot = false;
+      continue;
+    }
+
+    if (UI_CHANGING_AGENT_DEVICE_COMMANDS.has(entry.normalizedCommand)) {
+      hasUiChangeSinceLastScreenshot = true;
+    }
+  }
+
+  return null;
+}
+
 async function main(): Promise<void> {
   await ensureArtifactsDir();
   await ensureScreenshotsDir();
@@ -715,30 +755,24 @@ async function main(): Promise<void> {
     instructions: [
       `You are a ${context.platformLabel} QA agent running inside EAS Workflows.`,
       'Treat the app and repository as a black box.',
-      'Infer a short list of acceptance criteria from PR metadata, focusing on user-visible behavior.',
       'The workflow has already installed and launched the app before the agent starts.',
-      'Before relying on non-trivial agent-device CLI behavior, use the agent_device tool to run agent-device help workflow.',
-      'When snapshot output contains @eN, interact with the exact ref. Never pass bare visible label text to press/click; use @eN or a formal selector like label="...".',
-      `Your first QA action after help must verify that ${context.applicationId} is foregrounded. Use appstate when possible; if appstate has no tracked foreground app or snapshot shows AgentDeviceRunner, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, then verify again.`,
-      'AgentDeviceRunner is only automation infrastructure. Do not treat it as the app under test, do not screenshot it as evidence, and do not report it as a meaningful app state.',
+      'Start with get_pr_context and agent_device help workflow, then infer acceptance criteria from user-visible PR behavior.',
+      `Verify ${context.applicationId} is foregrounded with appstate or a successful open --relaunch before collecting evidence.`,
+      `When appstate has no tracked foreground app, or a snapshot shows AgentDeviceRunner, call agent_device with command "open" and args ["${context.applicationId}", "--relaunch"], wait briefly, and verify again.`,
+      'AgentDeviceRunner is automation infrastructure; the app under test is the evidence source.',
       context.platform === 'ios'
-        ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Do not pass --device, --udid, --serial, or --session in normal app commands.`
+        ? `For iOS simulator runs, the workflow already booted and bound the simulator ${context.deviceName}. Normal app commands use the pre-bound simulator.`
         : 'For Android runs, the workflow already booted and bound the emulator.',
-      'When verifying whether text is visible on screen, prefer plain snapshot. Use snapshot -i mainly for interactive exploration and choosing refs.',
-      `Take 2-4 screenshots for the shortest useful path you test, saved temporarily in ${SCREENSHOTS_DIR} with .png filenames. Prefer one screenshot before the feature action and one on the final feature state. Avoid unrelated setup screenshots.`,
-      `Snapshots do not satisfy the screenshot requirement; call agent_device with command "screenshot" and a ${SCREENSHOTS_DIR}/*.png output path.`,
-      'After any UI transition, refresh your understanding with snapshot or diff snapshot.',
-      'Do not inspect repository source files, run git commands, or modify project code. The only allowed filesystem writes are the QA report files and temporary screenshots.',
-      'Do not claim success without evidence from tool results.',
-      'The workflow pre-binds the mobile target. Avoid explicit routing flags like --device, --udid, --serial, or --session in normal app commands unless you are inspecting device inventory.',
-      'When you save screenshots, use short descriptive file names and include matching screenshotLabels for every screenshot in write_report.',
-      'Use accessibility snapshots for semantic checks, but briefly inspect any screenshots already captured as evidence for obvious visual issues such as clipping, overflow, overlap, truncation, partial elements, and unsafe edge spacing.',
-      'Do not claim there are no visual inconsistencies based only on accessibility snapshot text.',
-      'If text-based automation evidence is inconclusive but screenshots likely show the relevant UI, report overallStatus as unsure.',
-      'Use overallStatus blocked only for real prerequisites or environment/tool failures. Do not report blocked because the session feels stale if the app was observable.',
-      'Do not close --shutdown before saving required screenshot evidence.',
-      'You must call write_report exactly once before you finish.',
-      'Never finish by returning plain text. Finish only by calling write_report.',
+      'Use agent_device command as exactly one subcommand and put flags in args, for example command "snapshot" with args ["-i"].',
+      'Use @eN refs or formal selectors for interactions, for example press @e18 or press label="Ship". Bare label text is an invalid target.',
+      'Use plain snapshot for visible text checks and snapshot -i for choosing interaction refs.',
+      'Refresh state with snapshot after press, fill, scroll, navigation, waits for async UI, or other UI transitions.',
+      `Capture screenshots as visual evidence in ${SCREENSHOTS_DIR} with .png filenames. Screenshots are useful when they show distinct relevant states; one final-state screenshot is enough for a single-screen change.`,
+      'For navigation changes, capture the source state before the action and the destination state after the action. For scrollable changed screens, capture the top state and a scrolled state when below-the-fold content matters.',
+      'Use screenshot filenames and labels that describe the visible state. Reserve words like before, after, and final for screenshots separated by a UI-changing action.',
+      'Inspect screenshots for obvious visual issues such as clipping, overflow, overlap, truncation, partial elements, and unsafe edge spacing. Pair this with accessibility snapshot text for semantic checks.',
+      'Use overallStatus passed for satisfied acceptance criteria, failed for user-visible regressions, unsure for incomplete but useful evidence, and blocked for concrete prerequisite or environment/tool failures.',
+      'Use write_report exactly once as the final action. Include checked items, issues, nextSteps, and screenshotLabels for every saved screenshot.',
     ].join(' '),
     toolChoice: 'required',
     prepareStep: async ({ steps, stepNumber }) => {
@@ -788,20 +822,20 @@ async function main(): Promise<void> {
       },
       agent_device: {
         description:
-          'Run an agent-device command for mobile UI automation and screenshot capture. Use help workflow first. For interactions, use press <x y|@ref|selector>, click <x y|@ref|selector>, fill <x y|@ref|selector> <text>, and never use bare visible label text as a target.',
+          'Run an agent-device command for mobile UI automation and screenshot capture. Use help workflow first. Interactions accept coordinates, @eN refs, or formal selectors such as label="Ship".',
         inputSchema: jsonSchema({
           type: 'object',
           properties: {
             command: {
               type: 'string',
               description:
-                'Exactly one agent-device subcommand, such as help, devices, reinstall, open, snapshot, press, fill, or screenshot. Do not include flags or arguments here; put them in args.',
+                'Exactly one agent-device subcommand, such as help, devices, reinstall, open, snapshot, press, fill, or screenshot. Put flags and arguments in args.',
             },
             args: {
               type: 'array',
               items: { type: 'string' },
               description:
-                `Remaining CLI arguments. Use ["workflow"] for help workflow. Use ${SCREENSHOTS_DIR}/*.png for screenshots. press/click targets must be x y coordinates, @eN refs, or formal selectors like label="..."; bare labels are invalid.`,
+                `Remaining CLI arguments. Use ["workflow"] for help workflow. Use ${SCREENSHOTS_DIR}/*.png for screenshots. press/click targets use x y coordinates, @eN refs, or formal selectors like label="...".`,
             },
           },
           required: ['command'],
@@ -882,6 +916,14 @@ async function main(): Promise<void> {
                 error: `Add screenshotLabels for every saved screenshot before reporting ${input.overallStatus}. Missing labels for: ${missingLabels.join(', ')}.`,
               };
             }
+
+            const unseparatedScreenshotPair = getUnseparatedScreenshotPair();
+            if (unseparatedScreenshotPair) {
+              return {
+                ok: false,
+                error: `Screenshots should show distinct relevant states. ${unseparatedScreenshotPair[0]} and ${unseparatedScreenshotPair[1]} were captured without a UI-changing command between them. Keep one screenshot, or capture the next one after an action such as press, scroll, navigation, fill, or wait for async UI.`,
+              };
+            }
           }
           if (
             input.overallStatus === 'blocked' &&
@@ -891,7 +933,7 @@ async function main(): Promise<void> {
           ) {
             return {
               ok: false,
-              error: `Do not mark the run blocked only because screenshot evidence is missing before attempting capture. Call agent_device with command "screenshot" and args ["${path.join(SCREENSHOTS_DIR, `${context.platform}-evidence.png`)}"] while the app under test is foregrounded. If that screenshot command fails, then report blocked with the screenshot failure.`,
+              error: `Try screenshot capture before using a blocked report for missing screenshot evidence. Call agent_device with command "screenshot" and args ["${path.join(SCREENSHOTS_DIR, `${context.platform}-evidence.png`)}"] while the app under test is foregrounded. If that screenshot command fails, report blocked with the screenshot failure.`,
             };
           }
           if (
@@ -903,7 +945,7 @@ async function main(): Promise<void> {
             return {
               ok: false,
               error:
-                'Do not mark the run blocked because of session/tool-call bookkeeping when the app was observable. Report the observed app result as passed, failed, or unsure, or identify a concrete environment/tool failure.',
+                'A blocked report needs a concrete environment or tool failure. When the app was observable, report the observed app result as passed, failed, or unsure.',
             };
           }
 
