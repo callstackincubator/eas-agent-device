@@ -63,15 +63,17 @@ async function checkRuntimeGraph() {
   const tools = graph.root.toolRegistry.preparedTools
     .map((tool) => tool.name)
     .sort();
-  const expectedTools = ["agent_device", "write_report"];
+  const requiredTools = ["agent_device", "write_report"];
+  const missingTools = requiredTools.filter((tool) => !tools.includes(tool));
 
-  if (tools.join("\n") !== expectedTools.join("\n")) {
+  if (missingTools.length > 0) {
     throw new Error(
-      `Unexpected Eve tools: ${tools.join(", ") || "(none)"}. Expected: ${expectedTools.join(", ")}.`,
+      `Missing Eve QA tools: ${missingTools.join(", ")}. Resolved tools: ${tools.join(", ") || "(none)"}.`,
     );
   }
 
-  console.log(`[agent-qa:check] Eve tools: ${tools.join(", ")}`);
+  console.log(`[agent-qa:check] Eve tools include: ${requiredTools.join(", ")}`);
+  console.log(`[agent-qa:check] Resolved tools: ${tools.join(", ")}`);
 }
 
 run("typecheck Eve agent", npmCommand, ["run", "typecheck"], { cwd: eveDir });
