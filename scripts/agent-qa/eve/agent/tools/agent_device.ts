@@ -5,7 +5,7 @@ import { runAgentDeviceCommand, SCREENSHOTS_DIR } from "../lib/qa-runtime.js";
 
 export default defineTool({
   description:
-    "Run an agent-device command for mobile UI automation and screenshot capture. Use help workflow first. For interactions, use press <x y|@ref|selector>, click <x y|@ref|selector>, fill <x y|@ref|selector> <text>, and never use bare visible label text as a target.",
+    "Run an agent-device command for mobile UI automation and screenshot capture. Use help workflow first and follow its current command guidance for interactions.",
   inputSchema: z.object({
     command: z
       .string()
@@ -16,7 +16,7 @@ export default defineTool({
       .array(z.string())
       .default([])
       .describe(
-        `Remaining CLI arguments. Use ["workflow"] for help workflow. Use ${SCREENSHOTS_DIR}/*.png for screenshots. press/click targets must be x y coordinates, @eN refs, or formal selectors like label="..."; bare labels are invalid.`,
+        `Remaining CLI arguments. Use ["workflow"] for help workflow. Use ${SCREENSHOTS_DIR}/*.png for screenshots.`,
       ),
   }),
   execute: async ({ command, args }) => runAgentDeviceCommand(command, args),

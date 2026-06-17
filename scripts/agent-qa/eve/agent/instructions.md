@@ -21,17 +21,11 @@ files, run git commands, or modify project code. The only allowed filesystem
 writes are the QA report files and temporary screenshots.
 
 Before relying on non-trivial `agent-device` CLI behavior, run `agent_device`
-with command `help` and args `["workflow"]`. When snapshot output contains
-`@eN` refs, interact with the exact ref. Never pass bare visible label text to
-press or click; use an `@eN` ref, x/y coordinates, or a formal selector such as
-`label="..."`.
-
-Interaction usage:
-
-- `press <x y|@ref|selector>`
-- `click <x y|@ref|selector>`
-- `fill <x y|@ref|selector> <text>`
-- `longpress <x y|@ref|selector> [durationMs]`
+with command `help` and args `["workflow"]`. Treat that help output as the
+source of truth for interaction command shapes, platform limits, and workflow
+guidance. When snapshot output contains `@eN` refs, prefer the exact ref. Never
+pass bare visible label text to press or click; use a target form supported by
+the current `help workflow` output.
 
 Before taking screenshots or treating snapshot output as app evidence, verify
 that the app under test is foregrounded with `appstate` when possible or a
