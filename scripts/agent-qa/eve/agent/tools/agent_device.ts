@@ -9,7 +9,9 @@ import { z } from "zod";
 
 const execFile = promisify(execFileCallback);
 const ROOT_DIR = path.resolve(process.env.AGENT_QA_ROOT_DIR || process.cwd());
-const SCREENSHOTS_DIR = path.join(tmpdir(), "agent-qa-screenshots");
+const SCREENSHOTS_DIR =
+  process.env.AGENT_QA_SCREENSHOTS_DIR ||
+  path.join(tmpdir(), "agent-qa-screenshots");
 
 function trim(value: string, max = 6000): string {
   if (value.length <= max) {

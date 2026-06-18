@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 
 const rootDir = process.cwd();
 const eveDir = path.join(rootDir, "scripts", "agent-qa", "eve");
@@ -30,38 +29,54 @@ function run(label, command, args, options = {}) {
   }
 }
 
-async function importEveInternal(modulePath) {
-  return import(
-    pathToFileURL(path.join(eveDir, "node_modules", "eve", modulePath)).href
-  );
+function capture(label, command, args, options = {}) {
+  console.log(`\n[agent-qa:check] ${label}`);
+
+  const result = spawnSync(command, args, {
+    cwd: options.cwd || rootDir,
+    env: {
+      ...process.env,
+      ...options.env,
+    },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(
+      `${label} failed with exit code ${result.status ?? "n/a"}.`,
+    );
+  }
+
+  const stdout = result.stdout || "";
+  if (stdout.trim()) {
+    console.log(stdout.trim());
+  }
+
+  return stdout;
 }
 
-async function checkRuntimeGraph() {
-  console.log("\n[agent-qa:check] resolve Eve runtime graph");
+function parseJsonOutput(output) {
+  try {
+    return JSON.parse(output);
+  } catch {
+    const start = output.indexOf("{");
+    const end = output.lastIndexOf("}");
+    if (start === -1 || end === -1 || end < start) {
+      throw new Error("Eve info did not produce JSON output.");
+    }
 
-  const { createAuthoredSourceRuntimeCompiledArtifactsSource } =
-    await importEveInternal(
-      "dist/src/internal/application/runtime-compiled-artifacts-source.js",
-    );
-  const { loadCompiledManifest } = await importEveInternal(
-    "dist/src/runtime/loaders/manifest.js",
-  );
-  const { loadCompiledModuleMapFromAuthoredSource } = await importEveInternal(
-    "dist/src/internal/authored-module-map-loader.js",
-  );
-  const { resolveRuntimeAgentGraph } = await importEveInternal(
-    "dist/src/runtime/resolve-agent-graph.js",
-  );
+    return JSON.parse(output.slice(start, end + 1));
+  }
+}
 
-  const compiledArtifactsSource =
-    createAuthoredSourceRuntimeCompiledArtifactsSource(eveDir);
-  const manifest = await loadCompiledManifest({ compiledArtifactsSource });
-  const moduleMap = await loadCompiledModuleMapFromAuthoredSource({
-    compiledArtifactsSource,
-  });
-  const graph = await resolveRuntimeAgentGraph({ manifest, moduleMap });
-  const tools = graph.root.toolRegistry.preparedTools
-    .map((tool) => tool.name)
+function checkEveInfo(info) {
+  const tools = (info.tools || [])
+    .map((tool) => (typeof tool === "string" ? tool : tool.name))
     .sort();
   const requiredTools = ["agent_device", "write_report"];
   const missingTools = requiredTools.filter((tool) => !tools.includes(tool));
@@ -73,17 +88,20 @@ async function checkRuntimeGraph() {
   }
 
   console.log(`[agent-qa:check] Eve tools include: ${requiredTools.join(", ")}`);
-  console.log(`[agent-qa:check] Resolved tools: ${tools.join(", ")}`);
+  console.log(`[agent-qa:check] Authored tools: ${tools.join(", ")}`);
 }
 
 run("typecheck Eve agent", npmCommand, ["run", "typecheck"], { cwd: eveDir });
-run("inspect Eve agent", npmCommand, ["exec", "--", "eve", "info", "--json"], {
-  cwd: eveDir,
-});
+const eveInfoOutput = capture(
+  "inspect Eve agent",
+  npmCommand,
+  ["exec", "--", "eve", "info", "--json"],
+  { cwd: eveDir },
+);
+checkEveInfo(parseJsonOutput(eveInfoOutput));
 run("build Eve agent", npmCommand, ["exec", "--", "eve", "build"], {
   cwd: eveDir,
 });
-await checkRuntimeGraph();
 run("exercise agent-qa bootstrap path", npmCommand, ["run", "agent-qa"], {
   env: {
     AI_GATEWAY_API_KEY: process.env.AI_GATEWAY_API_KEY || "local-validation",

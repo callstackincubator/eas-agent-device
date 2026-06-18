@@ -10,7 +10,9 @@ import { z } from "zod";
 
 const ROOT_DIR = path.resolve(process.env.AGENT_QA_ROOT_DIR || process.cwd());
 const ARTIFACTS_DIR = path.join(ROOT_DIR, "artifacts", "qa");
-const SCREENSHOTS_DIR = path.join(tmpdir(), "agent-qa-screenshots");
+const SCREENSHOTS_DIR =
+  process.env.AGENT_QA_SCREENSHOTS_DIR ||
+  path.join(tmpdir(), "agent-qa-screenshots");
 const REPORT_PATH = path.join(ARTIFACTS_DIR, "report.json");
 const SECTION_PATH = path.join(ARTIFACTS_DIR, "section.md");
 const STATUS_PATH = path.join(ARTIFACTS_DIR, "status.txt");

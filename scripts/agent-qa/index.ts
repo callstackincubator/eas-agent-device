@@ -1,12 +1,27 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-type EveClientModule = typeof import("./eve/node_modules/eve/dist/src/client/index.js");
+type EveClientModule = {
+  Client: new (options: {
+    host: string;
+    maxReconnectAttempts?: number;
+  }) => {
+    session(): {
+      send(input: {
+        message: string;
+        clientContext: ReturnType<typeof buildClientContext>;
+      }): Promise<{
+        result(): Promise<{ status: string; message?: string }>;
+      }>;
+    };
+  };
+};
 type QaPlatform = "android" | "ios";
 type ParsedPr = {
   number?: number;
@@ -28,8 +43,14 @@ const EVE_HOST = `http://127.0.0.1:${EVE_PORT}`;
 const SERVER_READY_TIMEOUT_MS = Number(
   process.env.AGENT_QA_EVE_READY_TIMEOUT_MS || 60_000,
 );
-const EVE_PACKAGE_PATH = path.join(EVE_DIR, "node_modules", "eve", "package.json");
+const EVE_PACKAGE_PATH = path.join(
+  EVE_DIR,
+  "node_modules",
+  "eve",
+  "package.json",
+);
 const EVE_BIN_PATH = path.join(EVE_DIR, "node_modules", "eve", "bin", "eve.js");
+const requireFromEve = createRequire(path.join(EVE_DIR, "package.json"));
 const MODEL_ID = process.env.QA_MODEL || "openai/gpt-5.4-mini";
 const BOOTSTRAP_ERROR = process.env.AGENT_QA_BOOTSTRAP_ERROR;
 const pr = parseJson<ParsedPr>(process.env.PR_JSON, {});
@@ -178,16 +199,9 @@ function buildServerEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
     AGENT_QA_ROOT_DIR: ROOT_DIR,
+    AGENT_QA_SCREENSHOTS_DIR: SCREENSHOTS_DIR,
     PATH: [rootBin, eveBin, process.env.PATH || ""].filter(Boolean).join(":"),
   };
-}
-
-function resolveNpmCommand(): string {
-  return process.env.AGENT_QA_NPM_BIN || process.env.npm_execpath || "npm";
-}
-
-function spawnNpm(args: string[]): ChildProcess {
-  return spawnLogged(resolveNpmCommand(), args, { cwd: EVE_DIR });
 }
 
 function spawnLogged(
@@ -212,9 +226,14 @@ function spawnLogged(
   return child;
 }
 
-async function runNpm(args: string[]): Promise<void> {
+async function runProcess(
+  label: string,
+  command: string,
+  args: string[],
+  options: { cwd: string },
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawnNpm(args);
+    const child = spawnLogged(command, args, options);
     child.once("error", reject);
     child.once("exit", (code, signal) => {
       if (code === 0) {
@@ -224,20 +243,27 @@ async function runNpm(args: string[]): Promise<void> {
 
       reject(
         new Error(
-          `npm ${args.join(" ")} failed (code ${code ?? "n/a"}, signal ${signal ?? "n/a"}).`,
+          `${label} failed (code ${code ?? "n/a"}, signal ${signal ?? "n/a"}).`,
         ),
       );
     });
   });
 }
 
-async function ensureEveDependencies(): Promise<void> {
-  if (existsSync(EVE_PACKAGE_PATH)) {
+function ensureEveDependencies(): void {
+  if (existsSync(EVE_PACKAGE_PATH) && existsSync(EVE_BIN_PATH)) {
     return;
   }
 
-  console.log("Installing EVE agent dependencies...");
-  await runNpm(["install"]);
+  throw new Error(
+    "Missing Eve agent dependencies. Run `npm ci --prefix scripts/agent-qa/eve` before agent QA.",
+  );
+}
+
+async function buildEveApplication(): Promise<void> {
+  await runProcess("eve build", process.execPath, [EVE_BIN_PATH, "build"], {
+    cwd: EVE_DIR,
+  });
 }
 
 function startEveServer(): ChildProcess {
@@ -245,14 +271,11 @@ function startEveServer(): ChildProcess {
     process.execPath,
     [
       EVE_BIN_PATH,
-      "dev",
-      "--no-ui",
+      "start",
       "--host",
       "127.0.0.1",
       "--port",
       String(EVE_PORT),
-      "--logs",
-      "stderr",
     ],
     {
       cwd: EVE_DIR,
@@ -292,11 +315,6 @@ async function waitForProcessExit(
   ]);
 }
 
-/*
- * eve dev can leave the Nitro server alive if only an npm wrapper process is
- * killed. The server is started as its own process group so CI can always
- * tear down the whole tree before exporting workflow outputs.
- */
 async function stopEveServer(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
@@ -347,7 +365,7 @@ async function waitForEveServer(child: ChildProcess) {
 
 async function loadEveClient(): Promise<EveClientModule> {
   return import(
-    pathToFileURL(path.join(EVE_DIR, "node_modules", "eve", "dist", "src", "client", "index.js")).href
+    pathToFileURL(requireFromEve.resolve("eve/client")).href
   ) as Promise<EveClientModule>;
 }
 
@@ -379,7 +397,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  await ensureEveDependencies();
+  ensureEveDependencies();
+  await buildEveApplication();
 
   const server = startEveServer();
 
@@ -388,7 +407,9 @@ async function main(): Promise<void> {
     const result = await runEveQa();
 
     if (result.message) {
-      console.log(trim(`Eve agent finished with final text:\n${result.message}`, 4000));
+      console.log(
+        trim(`Eve agent finished with final text:\n${result.message}`, 4000),
+      );
     }
 
     if (!existsSync(SECTION_PATH)) {
