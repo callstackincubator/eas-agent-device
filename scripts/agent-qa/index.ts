@@ -70,12 +70,6 @@ const EVE_HOST = `http://127.0.0.1:${EVE_PORT}`;
 const SERVER_READY_TIMEOUT_MS = Number(
   process.env.AGENT_QA_EVE_READY_TIMEOUT_MS || 60_000,
 );
-const EVE_PACKAGE_PATH = path.join(
-  EVE_DIR,
-  "node_modules",
-  "eve",
-  "package.json",
-);
 const EVE_BIN_PATH = path.join(EVE_DIR, "node_modules", "eve", "bin", "eve.js");
 const requireFromEve = createRequire(path.join(EVE_DIR, "package.json"));
 const MODEL_ID = process.env.QA_MODEL || "openai/gpt-5.4-mini";
@@ -221,17 +215,7 @@ function ensureRequiredAgentQaEnvs(): void {
 }
 
 async function writeBlockedReport(error: Error): Promise<void> {
-  await ensureOutputDirs();
-
-  const report = {
-    generatedAt: new Date().toISOString(),
-    model: MODEL_ID,
-    buildId: context.buildId,
-    workflowUrl: context.workflowUrl,
-    platform: context.platform,
-    platformLabel: context.platformLabel,
-    prNumber: context.prNumber,
-    screenshots: [],
+  await writeQaReport({
     overallStatus: "blocked",
     summary: error.message,
     checked: [`Attempted to run ${context.platformLabel} QA agent on PR changes`],
@@ -240,34 +224,7 @@ async function writeBlockedReport(error: Error): Promise<void> {
       "Check the workflow logs for command failures.",
       `Verify AI Gateway credentials, ${context.platformLabel} build availability, and ${context.platform === "ios" ? "simulator" : "emulator"} configuration.`,
     ],
-  };
-
-  await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  await writeFile(STATUS_PATH, "blocked\n", "utf8");
-  await writeFile(
-    SECTION_PATH,
-    [
-      `### ${context.platformLabel}`,
-      "",
-      "**Status:** blocked",
-      "",
-      error.message,
-      "",
-      "### Checked",
-      ...report.checked.map((item) => `- ${item}`),
-      "",
-      "### Issues",
-      `- ${error.message}`,
-      "",
-      "### Screenshots",
-      "- No screenshots were saved.",
-      "",
-      "### Next steps",
-      ...report.nextSteps.map((step) => `- ${step}`),
-      "",
-    ].join("\n"),
-    "utf8",
-  );
+  });
 }
 
 async function listScreenshots(): Promise<ScreenshotInfo[]> {
@@ -488,7 +445,7 @@ async function runProcess(
 }
 
 function ensureEveDependencies(): void {
-  if (existsSync(EVE_PACKAGE_PATH) && existsSync(EVE_BIN_PATH)) {
+  if (existsSync(EVE_BIN_PATH)) {
     return;
   }
 
