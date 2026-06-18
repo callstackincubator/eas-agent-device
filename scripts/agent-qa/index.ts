@@ -7,20 +7,22 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+type EveClient = {
+  health(): Promise<unknown>;
+  session(): {
+    send(input: {
+      message: string;
+      clientContext: ReturnType<typeof buildClientContext>;
+    }): Promise<{
+      result(): Promise<{ status: string; message?: string }>;
+    }>;
+  };
+};
 type EveClientModule = {
   Client: new (options: {
     host: string;
     maxReconnectAttempts?: number;
-  }) => {
-    session(): {
-      send(input: {
-        message: string;
-        clientContext: ReturnType<typeof buildClientContext>;
-      }): Promise<{
-        result(): Promise<{ status: string; message?: string }>;
-      }>;
-    };
-  };
+  }) => EveClient;
 };
 type QaPlatform = "android" | "ios";
 type ParsedPr = {
@@ -331,7 +333,7 @@ async function stopEveServer(child: ChildProcess) {
   child.stderr?.destroy();
 }
 
-async function waitForEveServer(child: ChildProcess) {
+async function waitForEveServer(child: ChildProcess, client: EveClient) {
   const startedAt = Date.now();
   let exitError: Error | undefined;
 
@@ -347,10 +349,8 @@ async function waitForEveServer(child: ChildProcess) {
     }
 
     try {
-      const response = await fetch(`${EVE_HOST}/eve/v1/health`);
-      if (response.ok) {
-        return;
-      }
+      await client.health();
+      return;
     } catch {
       // Server is still starting.
     }
@@ -369,12 +369,7 @@ async function loadEveClient(): Promise<EveClientModule> {
   ) as Promise<EveClientModule>;
 }
 
-async function runEveQa() {
-  const { Client } = await loadEveClient();
-  const client = new Client({
-    host: EVE_HOST,
-    maxReconnectAttempts: 5,
-  });
+async function runEveQa(client: EveClient) {
   const session = client.session();
   const response = await session.send({
     message: "Run the mobile QA pass for the pull request described in clientContext.",
@@ -400,11 +395,16 @@ async function main(): Promise<void> {
   ensureEveDependencies();
   await buildEveApplication();
 
+  const { Client } = await loadEveClient();
+  const client = new Client({
+    host: EVE_HOST,
+    maxReconnectAttempts: 5,
+  });
   const server = startEveServer();
 
   try {
-    await waitForEveServer(server);
-    const result = await runEveQa();
+    await waitForEveServer(server, client);
+    const result = await runEveQa(client);
 
     if (result.message) {
       console.log(
