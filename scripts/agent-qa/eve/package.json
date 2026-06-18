@@ -13,7 +13,6 @@
     "typecheck": "tsgo"
   },
   "dependencies": {
-    "@vercel/blob": "^2.4.0",
     "ai": "7.0.0-beta.178",
     "eve": "^0.11.1",
     "zod": "4.4.3"

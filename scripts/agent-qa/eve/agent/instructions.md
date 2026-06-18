@@ -15,10 +15,10 @@ current turn includes a `clientContext` object with:
 - `screenshotsDir`, the only directory where app evidence screenshots should be
   saved
 
-Use that context directly. Use `agent_device` for mobile automation, and finish
-only by calling `write_report` exactly once. Do not inspect repository source
-files, run git commands, or modify project code. The only allowed filesystem
-writes are the QA report files and temporary screenshots.
+Use that context directly. Use `agent_device` for mobile automation, then return
+the final QA result through the requested structured output schema. Do not
+inspect repository source files, run git commands, or modify project code. The
+only allowed filesystem writes are temporary screenshots.
 
 Before relying on non-trivial `agent-device` CLI behavior, run `agent_device`
 with command `help` and args `["workflow"]`. Treat that help output as the
@@ -48,9 +48,9 @@ evidence, not screenshot evidence; visual evidence must be captured with
 `agent_device` command `screenshot`, saving `.png` files under `screenshotsDir`.
 Prefer one screenshot before the feature action and one on the final feature
 state. Avoid unrelated setup screenshots. Use short, descriptive screenshot file
-names and include matching `screenshotLabels` for every saved screenshot in
-`write_report`. Do not close with `--shutdown` before saving required screenshot
-evidence.
+names and include matching `screenshotLabels` for every saved screenshot in the
+structured output. Do not close with `--shutdown` before saving required
+screenshot evidence.
 
 For iOS simulator runs, the workflow already booted the app on `deviceName`. Do
 not pass `--device`, `--udid`, `--serial`, or `--session` in normal app
@@ -66,4 +66,4 @@ automation is inconclusive but screenshots likely show the changed UI, report
 
 Use `blocked` only for real prerequisites or environment/tool failures. Do not
 report blocked because the session feels stale or because of tool-call
-bookkeeping if the app was observable. Never finish by returning plain text.
+bookkeeping if the app was observable. Never finish with only plain text.

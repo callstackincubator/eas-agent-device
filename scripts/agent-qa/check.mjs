@@ -78,7 +78,7 @@ function checkEveInfo(info) {
   const tools = (info.tools || [])
     .map((tool) => (typeof tool === "string" ? tool : tool.name))
     .sort();
-  const requiredTools = ["agent_device", "write_report"];
+  const requiredTools = ["agent_device"];
   const missingTools = requiredTools.filter((tool) => !tools.includes(tool));
 
   if (missingTools.length > 0) {
