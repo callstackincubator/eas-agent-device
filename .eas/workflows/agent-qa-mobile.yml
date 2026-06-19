@@ -104,6 +104,9 @@ jobs:
     steps:
       - uses: eas/checkout
       - uses: eas/install_node_modules
+      - id: install_eve_agent
+        run: |
+          npm ci --prefix ./scripts/agent-qa/eve
       - id: install_agent_device
         run: |
           npm install -g agent-device@0.16.12
@@ -148,6 +151,9 @@ jobs:
     steps:
       - uses: eas/checkout
       - uses: eas/install_node_modules
+      - id: install_eve_agent
+        run: |
+          npm ci --prefix ./scripts/agent-qa/eve
       - id: install_agent_device
         run: |
           npm install -g agent-device@0.16.12
