@@ -93,6 +93,9 @@ jobs:
       top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
       screenshots_cell: ${{ steps.run_agent_qa.outputs.screenshots_cell }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
+      naive_status_label: ${{ steps.run_agent_qa.outputs.naive_status_label }}
+      naive_top_issue: ${{ steps.run_agent_qa.outputs.naive_top_issue }}
+      naive_section_body: ${{ steps.run_agent_qa.outputs.naive_section_body }}
     env:
       BUILD_ID: ${{ after.android_repack.outputs.build_id || after.android_build.outputs.build_id }}
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
@@ -107,6 +110,9 @@ jobs:
       - id: install_eve_agent
         run: |
           npm ci --prefix ./scripts/agent-qa/eve
+      - id: install_eve_naive_agent
+        run: |
+          npm ci --prefix ./scripts/agent-qa/eve-naive
       - id: install_agent_device
         run: |
           npm install -g agent-device@0.16.12
@@ -138,6 +144,9 @@ jobs:
       top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
       screenshots_cell: ${{ steps.run_agent_qa.outputs.screenshots_cell }}
       section_body: ${{ steps.run_agent_qa.outputs.section_body }}
+      naive_status_label: ${{ steps.run_agent_qa.outputs.naive_status_label }}
+      naive_top_issue: ${{ steps.run_agent_qa.outputs.naive_top_issue }}
+      naive_section_body: ${{ steps.run_agent_qa.outputs.naive_section_body }}
     env:
       BUILD_ID: ${{ after.ios_repack.outputs.build_id || after.ios_build.outputs.build_id }}
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
@@ -154,6 +163,9 @@ jobs:
       - id: install_eve_agent
         run: |
           npm ci --prefix ./scripts/agent-qa/eve
+      - id: install_eve_naive_agent
+        run: |
+          npm ci --prefix ./scripts/agent-qa/eve-naive
       - id: install_agent_device
         run: |
           npm install -g agent-device@0.16.12
@@ -182,6 +194,9 @@ jobs:
       payload: |
         ## Agent QA
 
+        Tool-based agent: drives the actual build with `agent-device` and reports
+        only what it observed on screen.
+
         | Platform | Status | Issues |
         | --- | --- | --- |
         | Android | ${{ after.qa_android.outputs.status_label || '⛔ blocked' }} | ${{ after.qa_android.outputs.top_issue || 'No Android QA report was produced.' }} |
@@ -203,4 +218,28 @@ jobs:
         <summary>Full iOS Report</summary>
 
         ${{ after.qa_ios.outputs.section_body || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS QA section was produced.\n' }}
+        </details>
+
+        ---
+
+        ### For comparison: naive prompt-only agent
+
+        Same model, same output schema, no device access — this agent only ever
+        sees the PR title/description and code diff, never the running app.
+
+        | Platform | Status | Verdict |
+        | --- | --- | --- |
+        | Android | ${{ after.qa_android.outputs.naive_status_label || '⛔ blocked' }} | ${{ after.qa_android.outputs.naive_top_issue || 'No Android naive report was produced.' }} |
+        | iOS | ${{ after.qa_ios.outputs.naive_status_label || '⛔ blocked' }} | ${{ after.qa_ios.outputs.naive_top_issue || 'No iOS naive report was produced.' }} |
+
+        <details>
+        <summary>Full Android Naive Report</summary>
+
+        ${{ after.qa_android.outputs.naive_section_body || '### Android\n\n**Status:** ⛔ blocked\n\nNo Android naive section was produced.\n' }}
+        </details>
+
+        <details>
+        <summary>Full iOS Naive Report</summary>
+
+        ${{ after.qa_ios.outputs.naive_section_body || '### iOS\n\n**Status:** ⛔ blocked\n\nNo iOS naive section was produced.\n' }}
         </details>

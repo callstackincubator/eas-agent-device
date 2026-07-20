@@ -4,6 +4,7 @@ import process from "node:process";
 
 const rootDir = process.cwd();
 const eveDir = path.join(rootDir, "scripts", "agent-qa", "eve");
+const eveNaiveDir = path.join(rootDir, "scripts", "agent-qa", "eve-naive");
 const npmCommand = process.env.AGENT_QA_NPM_BIN || "npm";
 
 function run(label, command, args, options = {}) {
@@ -36,6 +37,25 @@ run("inspect Eve agent", npmCommand, ["exec", "--", "eve", "info", "--json"], {
 run("build Eve agent", npmCommand, ["exec", "--", "eve", "build"], {
   cwd: eveDir,
 });
+
+run("typecheck Eve naive agent", npmCommand, ["run", "typecheck"], {
+  cwd: eveNaiveDir,
+});
+run(
+  "inspect Eve naive agent",
+  npmCommand,
+  ["exec", "--", "eve", "info", "--json"],
+  { cwd: eveNaiveDir },
+);
+run("build Eve naive agent", npmCommand, ["exec", "--", "eve", "build"], {
+  cwd: eveNaiveDir,
+});
+
+// This exercises both agents through the real npm run agent-qa entrypoint:
+// the tool-based agent short-circuits to a blocked report via
+// AGENT_QA_BOOTSTRAP_ERROR, while the naive agent still runs end to end
+// (against a fake PR diff) and is expected to blocked-report on the
+// invalid AI Gateway key rather than crash the process.
 run("exercise agent-qa bootstrap path", npmCommand, ["run", "agent-qa"], {
   env: {
     AI_GATEWAY_API_KEY: process.env.AI_GATEWAY_API_KEY || "local-validation",
@@ -45,6 +65,9 @@ run("exercise agent-qa bootstrap path", npmCommand, ["run", "agent-qa"], {
       process.env.APP_PATH ||
       path.join(rootDir, "artifacts", "agent-qa-local.app"),
     QA_PLATFORM: process.env.QA_PLATFORM || "android",
+    PR_JSON:
+      process.env.PR_JSON ||
+      JSON.stringify({ title: "Local validation PR", body: "n/a" }),
   },
 });
 

@@ -36,7 +36,7 @@ type EveClient = {
   session(): {
     send<T>(input: {
       message: string;
-      clientContext: ReturnType<typeof buildClientContext>;
+      clientContext: Record<string, unknown>;
       outputSchema?: unknown;
     }): Promise<{
       result(): Promise<{ status: string; message?: string; data?: T }>;
@@ -57,23 +57,43 @@ type ParsedPr = {
   draft?: boolean;
   labels?: Array<{ name?: string }>;
 };
+type DiffInfo = {
+  diff: string;
+  diffAvailable: boolean;
+  diffTruncated: boolean;
+};
+type RunnerConfig = {
+  key: "toolBased" | "naive";
+  label: string;
+  dir: string;
+  host: string;
+  binPath: string;
+  artifactsDir: string;
+  sectionPath: string;
+  statusPath: string;
+  reportPath: string;
+  capturesScreenshots: boolean;
+};
+type RunFlavorOptions = {
+  message: string;
+  buildClientContext: () => Record<string, unknown>;
+  bootstrapError?: string;
+  soft: boolean;
+};
 
 const ROOT_DIR = process.cwd();
-const EVE_DIR = path.join(ROOT_DIR, "scripts", "agent-qa", "eve");
 const ARTIFACTS_DIR = path.join(ROOT_DIR, "artifacts", "qa");
 const SCREENSHOTS_DIR = path.join(tmpdir(), "agent-qa-screenshots");
-const SECTION_PATH = path.join(ARTIFACTS_DIR, "section.md");
-const STATUS_PATH = path.join(ARTIFACTS_DIR, "status.txt");
-const REPORT_PATH = path.join(ARTIFACTS_DIR, "report.json");
 const EVE_PORT = Number(process.env.AGENT_QA_EVE_PORT || 4317);
-const EVE_HOST = `http://127.0.0.1:${EVE_PORT}`;
+const NAIVE_EVE_PORT = Number(
+  process.env.AGENT_QA_EVE_NAIVE_PORT || EVE_PORT + 1,
+);
 const SERVER_READY_TIMEOUT_MS = Number(
   process.env.AGENT_QA_EVE_READY_TIMEOUT_MS || 60_000,
 );
-const EVE_BIN_PATH = path.join(EVE_DIR, "node_modules", "eve", "bin", "eve.js");
-const requireFromEve = createRequire(path.join(EVE_DIR, "package.json"));
 const MODEL_ID = process.env.QA_MODEL || "openai/gpt-5.4-mini";
 const BOOTSTRAP_ERROR = process.env.AGENT_QA_BOOTSTRAP_ERROR;
+const DIFF_MAX_CHARS = 20_000;
 const QA_REPORT_OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -133,6 +153,44 @@ const context = {
       : process.env.AGENT_DEVICE_ANDROID_DEVICE || ""),
 };
 
+function makeRunnerConfig(options: {
+  key: RunnerConfig["key"];
+  label: string;
+  dir: string;
+  port: number;
+  capturesScreenshots: boolean;
+}): RunnerConfig {
+  const artifactsDir = path.join(ARTIFACTS_DIR, options.key);
+  return {
+    key: options.key,
+    label: options.label,
+    dir: options.dir,
+    host: `http://127.0.0.1:${options.port}`,
+    binPath: path.join(options.dir, "node_modules", "eve", "bin", "eve.js"),
+    artifactsDir,
+    sectionPath: path.join(artifactsDir, "section.md"),
+    statusPath: path.join(artifactsDir, "status.txt"),
+    reportPath: path.join(artifactsDir, "report.json"),
+    capturesScreenshots: options.capturesScreenshots,
+  };
+}
+
+const TOOL_BASED_CONFIG = makeRunnerConfig({
+  key: "toolBased",
+  label: "Tool-based agent (agent-device)",
+  dir: path.join(ROOT_DIR, "scripts", "agent-qa", "eve"),
+  port: EVE_PORT,
+  capturesScreenshots: true,
+});
+
+const NAIVE_CONFIG = makeRunnerConfig({
+  key: "naive",
+  label: "Naive prompt-only agent (diff only, no device)",
+  dir: path.join(ROOT_DIR, "scripts", "agent-qa", "eve-naive"),
+  port: NAIVE_EVE_PORT,
+  capturesScreenshots: false,
+});
+
 function normalizePlatform(value: string | undefined): QaPlatform {
   return value === "ios" ? "ios" : "android";
 }
@@ -166,7 +224,7 @@ function humanizeScreenshotLabel(fileName: string): string {
   return words.join(" ") || fileName;
 }
 
-function buildClientContext() {
+function buildToolBasedClientContext(): Record<string, unknown> {
   return {
     prNumber: context.prNumber,
     title: pr.title || "Untitled PR",
@@ -188,9 +246,58 @@ function buildClientContext() {
   };
 }
 
+function buildNaiveClientContext(diffInfo: DiffInfo): Record<string, unknown> {
+  return {
+    prNumber: context.prNumber,
+    title: pr.title || "Untitled PR",
+    body: pr.body || "No PR body was provided.",
+    labels: Array.isArray(pr.labels)
+      ? pr.labels
+          .map((label) => label.name)
+          .filter((name): name is string => Boolean(name))
+      : [],
+    draft: Boolean(pr.draft),
+    platform: context.platform,
+    platformLabel: context.platformLabel,
+    diff: diffInfo.diff,
+    diffAvailable: diffInfo.diffAvailable,
+    diffTruncated: diffInfo.diffTruncated,
+  };
+}
+
+async function loadDiffInfo(): Promise<DiffInfo> {
+  const diffPathEnv = process.env.PR_DIFF_PATH;
+  if (!diffPathEnv) {
+    return { diff: "", diffAvailable: false, diffTruncated: false };
+  }
+
+  const diffPath = path.isAbsolute(diffPathEnv)
+    ? diffPathEnv
+    : path.join(ROOT_DIR, diffPathEnv);
+
+  try {
+    const raw = (await readFile(diffPath, "utf8")).trim();
+    if (!raw) {
+      return { diff: "", diffAvailable: false, diffTruncated: false };
+    }
+
+    const truncated = raw.length > DIFF_MAX_CHARS;
+    return {
+      diff: truncated
+        ? `${raw.slice(0, DIFF_MAX_CHARS)}\n...<diff truncated>`
+        : raw,
+      diffAvailable: true,
+      diffTruncated: truncated,
+    };
+  } catch {
+    return { diff: "", diffAvailable: false, diffTruncated: false };
+  }
+}
+
 async function ensureOutputDirs(): Promise<void> {
   await Promise.all([
-    mkdir(ARTIFACTS_DIR, { recursive: true }),
+    mkdir(TOOL_BASED_CONFIG.artifactsDir, { recursive: true }),
+    mkdir(NAIVE_CONFIG.artifactsDir, { recursive: true }),
     mkdir(SCREENSHOTS_DIR, { recursive: true }),
   ]);
 }
@@ -212,19 +319,6 @@ function ensureRequiredAgentQaEnvs(): void {
       "Missing required environment variable: AGENT_DEVICE_IOS_DEVICE",
     );
   }
-}
-
-async function writeBlockedReport(error: Error): Promise<void> {
-  await writeQaReport({
-    overallStatus: "blocked",
-    summary: error.message,
-    checked: [`Attempted to run ${context.platformLabel} QA agent on PR changes`],
-    issues: [error.message],
-    nextSteps: [
-      "Check the workflow logs for command failures.",
-      `Verify AI Gateway credentials, ${context.platformLabel} build availability, and ${context.platform === "ios" ? "simulator" : "emulator"} configuration.`,
-    ],
-  });
 }
 
 async function listScreenshots(): Promise<ScreenshotInfo[]> {
@@ -322,7 +416,10 @@ function renderScreenshotRows(screenshots: ScreenshotInfo[]): string[] {
   );
 }
 
-async function writeQaReport(input: QaReportInput): Promise<void> {
+async function writeQaReport(
+  config: RunnerConfig,
+  input: QaReportInput,
+): Promise<void> {
   await ensureOutputDirs();
 
   const labelMap = new Map(
@@ -331,16 +428,17 @@ async function writeQaReport(input: QaReportInput): Promise<void> {
       item.label.trim(),
     ]),
   );
-  const screenshots = (await uploadScreenshots(await listScreenshots())).map(
-    (screenshot) => ({
-      ...screenshot,
-      label:
-        labelMap.get(screenshot.fileName) ||
-        humanizeScreenshotLabel(screenshot.fileName),
-    }),
-  );
+  const screenshots = config.capturesScreenshots
+    ? (await uploadScreenshots(await listScreenshots())).map((screenshot) => ({
+        ...screenshot,
+        label:
+          labelMap.get(screenshot.fileName) ||
+          humanizeScreenshotLabel(screenshot.fileName),
+      }))
+    : [];
   const report = {
     generatedAt: new Date().toISOString(),
+    mode: config.key,
     model: MODEL_ID,
     buildId: context.buildId,
     workflowUrl: context.workflowUrl,
@@ -351,7 +449,7 @@ async function writeQaReport(input: QaReportInput): Promise<void> {
     ...input,
   };
   const lines = [
-    `### ${context.platformLabel}`,
+    `### ${context.platformLabel} — ${config.label}`,
     "",
     `**Status:** ${input.overallStatus}`,
     "",
@@ -381,14 +479,18 @@ async function writeQaReport(input: QaReportInput): Promise<void> {
     "",
   ];
 
-  await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  await writeFile(SECTION_PATH, trim(lines.join("\n"), 16000), "utf8");
-  await writeFile(STATUS_PATH, `${input.overallStatus}\n`, "utf8");
+  await writeFile(
+    config.reportPath,
+    `${JSON.stringify(report, null, 2)}\n`,
+    "utf8",
+  );
+  await writeFile(config.sectionPath, trim(lines.join("\n"), 16000), "utf8");
+  await writeFile(config.statusPath, `${input.overallStatus}\n`, "utf8");
 }
 
-function buildServerEnv(): NodeJS.ProcessEnv {
+function buildServerEnv(config: RunnerConfig): NodeJS.ProcessEnv {
   const rootBin = path.join(ROOT_DIR, "node_modules", ".bin");
-  const eveBin = path.join(EVE_DIR, "node_modules", ".bin");
+  const eveBin = path.join(config.dir, "node_modules", ".bin");
 
   return {
     ...process.env,
@@ -401,12 +503,12 @@ function buildServerEnv(): NodeJS.ProcessEnv {
 function spawnLogged(
   command: string,
   args: string[],
-  options: { cwd: string; detached?: boolean },
+  options: { cwd: string; env: NodeJS.ProcessEnv; detached?: boolean },
 ): ChildProcess {
   const child = spawn(command, args, {
     cwd: options.cwd,
     detached: options.detached,
-    env: buildServerEnv(),
+    env: options.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -424,7 +526,7 @@ async function runProcess(
   label: string,
   command: string,
   args: string[],
-  options: { cwd: string },
+  options: { cwd: string; env: NodeJS.ProcessEnv },
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawnLogged(command, args, options);
@@ -444,35 +546,41 @@ async function runProcess(
   });
 }
 
-function ensureEveDependencies(): void {
-  if (existsSync(EVE_BIN_PATH)) {
+function ensureEveDependencies(config: RunnerConfig): void {
+  if (existsSync(config.binPath)) {
     return;
   }
 
+  const relativeDir = path.relative(ROOT_DIR, config.dir);
   throw new Error(
-    "Missing Eve agent dependencies. Run `npm ci --prefix scripts/agent-qa/eve` before agent QA.",
+    `Missing Eve agent dependencies for ${config.label}. Run \`npm ci --prefix ${relativeDir}\` before agent QA.`,
   );
 }
 
-async function buildEveApplication(): Promise<void> {
-  await runProcess("eve build", process.execPath, [EVE_BIN_PATH, "build"], {
-    cwd: EVE_DIR,
-  });
+async function buildEveApplication(config: RunnerConfig): Promise<void> {
+  await runProcess(
+    `eve build (${config.key})`,
+    process.execPath,
+    [config.binPath, "build"],
+    { cwd: config.dir, env: buildServerEnv(config) },
+  );
 }
 
-function startEveServer(): ChildProcess {
+function startEveServer(config: RunnerConfig): ChildProcess {
+  const host = new URL(config.host);
   return spawnLogged(
     process.execPath,
     [
-      EVE_BIN_PATH,
+      config.binPath,
       "start",
       "--host",
       "127.0.0.1",
       "--port",
-      String(EVE_PORT),
+      host.port,
     ],
     {
-      cwd: EVE_DIR,
+      cwd: config.dir,
+      env: buildServerEnv(config),
       detached: process.platform !== "win32",
     },
   );
@@ -551,21 +659,26 @@ async function waitForEveServer(child: ChildProcess, client: EveClient) {
   }
 
   throw new Error(
-    `Timed out waiting ${SERVER_READY_TIMEOUT_MS}ms for Eve server at ${EVE_HOST}.`,
+    `Timed out waiting ${SERVER_READY_TIMEOUT_MS}ms for Eve server at ${child.spawnargs.join(" ")}.`,
   );
 }
 
-async function loadEveClient(): Promise<EveClientModule> {
+async function loadEveClient(config: RunnerConfig): Promise<EveClientModule> {
+  const requireFromEve = createRequire(path.join(config.dir, "package.json"));
   return import(
     pathToFileURL(requireFromEve.resolve("eve/client")).href
   ) as Promise<EveClientModule>;
 }
 
-async function runEveQa(client: EveClient) {
+async function runEveQa(
+  client: EveClient,
+  message: string,
+  clientContext: Record<string, unknown>,
+) {
   const session = client.session();
   const response = await session.send<QaReportInput>({
-    message: "Run the mobile QA pass for the pull request described in clientContext.",
-    clientContext: buildClientContext(),
+    message,
+    clientContext,
     outputSchema: QA_REPORT_OUTPUT_SCHEMA,
   });
   const result = await response.result();
@@ -577,52 +690,129 @@ async function runEveQa(client: EveClient) {
   };
 }
 
-async function main(): Promise<void> {
-  await ensureOutputDirs();
-  ensureRequiredAgentQaEnvs();
+async function runFlavorUnsafe(
+  config: RunnerConfig,
+  options: RunFlavorOptions,
+): Promise<void> {
+  ensureEveDependencies(config);
+  await buildEveApplication(config);
 
-  if (BOOTSTRAP_ERROR) {
-    await writeBlockedReport(new Error(BOOTSTRAP_ERROR));
-    return;
-  }
-
-  ensureEveDependencies();
-  await buildEveApplication();
-
-  const { Client } = await loadEveClient();
+  const { Client } = await loadEveClient(config);
   const client = new Client({
-    host: EVE_HOST,
+    host: config.host,
     maxReconnectAttempts: 5,
   });
-  const server = startEveServer();
+  const server = startEveServer(config);
 
   try {
     await waitForEveServer(server, client);
-    const result = await runEveQa(client);
+    const result = await runEveQa(
+      client,
+      options.message,
+      options.buildClientContext(),
+    );
 
     if (result.message) {
       console.log(
-        trim(`Eve agent finished with final text:\n${result.message}`, 4000),
+        trim(
+          `Eve agent (${config.key}) finished with final text:\n${result.message}`,
+          4000,
+        ),
       );
     }
 
     if (!result.data) {
       await writeBlockedReport(
+        config,
         new Error(
           result.message ||
             `The Eve agent completed with status "${result.status}" without structured QA report data.`,
         ),
       );
       console.log(
-        `Fallback QA report written to ${SECTION_PATH} because structured QA report data was not returned.`,
+        `Fallback QA report written to ${config.sectionPath} because structured QA report data was not returned.`,
       );
       return;
     }
 
-    await writeQaReport(result.data);
-    console.log(`QA report written to ${SECTION_PATH}`);
+    await writeQaReport(config, result.data);
+    console.log(`QA report written to ${config.sectionPath}`);
   } finally {
     await stopEveServer(server);
+  }
+}
+
+async function writeBlockedReport(
+  config: RunnerConfig,
+  error: Error,
+): Promise<void> {
+  await writeQaReport(config, {
+    overallStatus: "blocked",
+    summary: error.message,
+    checked: [`Attempted to run ${context.platformLabel} ${config.label}`],
+    issues: [error.message],
+    nextSteps:
+      config.key === "toolBased"
+        ? [
+            "Check the workflow logs for command failures.",
+            `Verify AI Gateway credentials, ${context.platformLabel} build availability, and ${context.platform === "ios" ? "simulator" : "emulator"} configuration.`,
+          ]
+        : [
+            "Check the workflow logs for command failures.",
+            "Verify AI Gateway credentials and that a PR diff was available at PR_DIFF_PATH.",
+          ],
+  });
+}
+
+async function runFlavor(
+  config: RunnerConfig,
+  options: RunFlavorOptions,
+): Promise<void> {
+  if (options.bootstrapError) {
+    await writeBlockedReport(config, new Error(options.bootstrapError));
+    return;
+  }
+
+  if (!options.soft) {
+    await runFlavorUnsafe(config, options);
+    return;
+  }
+
+  try {
+    await runFlavorUnsafe(config, options);
+  } catch (unknownError) {
+    const error =
+      unknownError instanceof Error
+        ? unknownError
+        : new Error(String(unknownError));
+    console.error(error);
+    await writeBlockedReport(config, error);
+  }
+}
+
+async function main(): Promise<void> {
+  await ensureOutputDirs();
+  ensureRequiredAgentQaEnvs();
+
+  const diffInfo = await loadDiffInfo();
+
+  const naivePromise = runFlavor(NAIVE_CONFIG, {
+    message:
+      "Review the pull request diff in clientContext and decide whether this change looks correct for the requested platform.",
+    buildClientContext: () => buildNaiveClientContext(diffInfo),
+    soft: true,
+  });
+
+  try {
+    await runFlavor(TOOL_BASED_CONFIG, {
+      message:
+        "Run the mobile QA pass for the pull request described in clientContext.",
+      buildClientContext: buildToolBasedClientContext,
+      bootstrapError: BOOTSTRAP_ERROR || undefined,
+      soft: false,
+    });
+  } finally {
+    await naivePromise;
   }
 }
 
@@ -634,6 +824,6 @@ try {
       ? unknownError
       : new Error(String(unknownError));
   console.error(error);
-  await writeBlockedReport(error);
+  await writeBlockedReport(TOOL_BASED_CONFIG, error);
   process.exitCode = 1;
 }

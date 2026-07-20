@@ -21,6 +21,23 @@ esac
 set +e
 export APP_PATH="${APP_PATH_ARG}"
 
+mkdir -p artifacts/qa
+
+# Best-effort PR diff for the naive prompt-only agent. Failures here (no
+# base sha, shallow clone, fetch error) are non-fatal: the naive agent
+# degrades to reporting that no diff was available.
+PR_DIFF_PATH="artifacts/qa/pr-diff.txt"
+DIFF_MAX_BYTES=20000
+: > "${PR_DIFF_PATH}"
+BASE_SHA="$(printf '%s' "${PR_JSON:-}" | jq -r '.base.sha // empty' 2>/dev/null)"
+HEAD_SHA="$(printf '%s' "${PR_JSON:-}" | jq -r '.head.sha // empty' 2>/dev/null)"
+if [ -n "${BASE_SHA}" ]; then
+  git fetch --quiet --depth=1 origin "${BASE_SHA}" >/dev/null 2>&1
+  git diff --no-color "${BASE_SHA}...${HEAD_SHA:-HEAD}" -- . 2>/dev/null \
+    | head -c "${DIFF_MAX_BYTES}" > "${PR_DIFF_PATH}"
+fi
+export PR_DIFF_PATH
+
 BOOTSTRAP_ERROR=""
 if [ "${QA_PLATFORM_VALUE}" = "android" ]; then
   BOOTSTRAP_STEP="install"
@@ -51,78 +68,103 @@ export AGENT_QA_BOOTSTRAP_ERROR="${BOOTSTRAP_ERROR}"
 npm run agent-qa
 EXIT_CODE=$?
 
-STATUS="$(cat artifacts/qa/status.txt 2>/dev/null || printf blocked)"
-case "${STATUS}" in
-  passed)
-    STATUS_LABEL="✅ passed"
-    ;;
-  failed)
-    STATUS_LABEL="❌ failed"
-    ;;
-  blocked)
-    STATUS_LABEL="⛔ blocked"
-    ;;
-  unsure)
-    STATUS_LABEL="🤔 unsure"
-    ;;
-  not_tested)
-    STATUS_LABEL="⚪ not_tested"
-    ;;
-  *)
-    STATUS_LABEL="⚪ ${STATUS}"
-    ;;
-esac
+# Reads one flavor's artifacts (tool-based or naive) and exposes them as
+# ${prefix}_STATUS / ${prefix}_STATUS_LABEL / ${prefix}_TOP_ISSUE /
+# ${prefix}_SCREENSHOTS_CELL / ${prefix}_SECTION_BODY globals.
+compute_qa_outputs() {
+  local dir="$1"
+  local platform_label="$2"
+  local prefix="$3"
+  local status status_label top_issue screenshots_cell section_body
 
-if [ -f artifacts/qa/section.md ]; then
-  SECTION_BODY="$(cat artifacts/qa/section.md)"
-else
-  SECTION_BODY="### ${PLATFORM_LABEL}
+  status="$(cat "${dir}/status.txt" 2>/dev/null || printf blocked)"
+  case "${status}" in
+    passed)
+      status_label="✅ passed"
+      ;;
+    failed)
+      status_label="❌ failed"
+      ;;
+    blocked)
+      status_label="⛔ blocked"
+      ;;
+    unsure)
+      status_label="🤔 unsure"
+      ;;
+    not_tested)
+      status_label="⚪ not_tested"
+      ;;
+    *)
+      status_label="⚪ ${status}"
+      ;;
+  esac
 
-**Status:** ${STATUS_LABEL}
+  if [ -f "${dir}/report.json" ]; then
+    top_issue="$(
+      jq -r '
+        if .overallStatus == "passed" then
+          "N/A"
+        else
+          (.issues[0] // .summary // "N/A")
+        end
+      ' "${dir}/report.json" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//'
+    )"
 
-No ${PLATFORM_LABEL} QA section was produced.
-"
-fi
-
-if [ -f artifacts/qa/report.json ]; then
-  TOP_ISSUE="$(
-    jq -r '
-      if .overallStatus == "passed" then
-        "N/A"
-      else
-        (.issues[0] // .summary // "N/A")
-      end
-    ' artifacts/qa/report.json | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//'
-  )"
-
-  SCREENSHOTS_CELL="$(
-    jq -r '
-      if (.screenshots | length) == 0 then
-        "N/A"
-      else
-        [
-          .screenshots[]
-          | if .blobUrl then
-              "**\((.label // .fileName))**<br><a href=\"\(.blobUrl)\"><img src=\"\(.blobUrl)\" alt=\"\((.label // .fileName))\" height=\"500\" /></a>"
-            else
-              "**\((.label // .fileName))**<br>\(.fileName) (\(.bytes) bytes)"
-            end
-        ] | join("<br><br>")
-      end
-    ' artifacts/qa/report.json
-  )"
-else
-  if [ "${STATUS}" = "passed" ]; then
-    TOP_ISSUE="N/A"
+    screenshots_cell="$(
+      jq -r '
+        if (.screenshots | length) == 0 then
+          "N/A"
+        else
+          [
+            .screenshots[]
+            | if .blobUrl then
+                "**\((.label // .fileName))**<br><a href=\"\(.blobUrl)\"><img src=\"\(.blobUrl)\" alt=\"\((.label // .fileName))\" height=\"500\" /></a>"
+              else
+                "**\((.label // .fileName))**<br>\(.fileName) (\(.bytes) bytes)"
+              end
+          ] | join("<br><br>")
+        end
+      ' "${dir}/report.json"
+    )"
   else
-    TOP_ISSUE="No report.json was produced."
+    if [ "${status}" = "passed" ]; then
+      top_issue="N/A"
+    else
+      top_issue="No report.json was produced."
+    fi
+    screenshots_cell="N/A"
   fi
-  SCREENSHOTS_CELL="N/A"
-fi
 
-set-output status "$STATUS"
-set-output status_label "$STATUS_LABEL"
-set-output top_issue "$TOP_ISSUE"
-set-output screenshots_cell "$SCREENSHOTS_CELL"
-set-output section_body "$SECTION_BODY"
+  if [ -f "${dir}/section.md" ]; then
+    section_body="$(cat "${dir}/section.md")"
+  else
+    section_body="### ${platform_label}
+
+**Status:** ${status_label}
+
+No ${platform_label} QA section was produced.
+"
+  fi
+
+  printf -v "${prefix}_STATUS" '%s' "${status}"
+  printf -v "${prefix}_STATUS_LABEL" '%s' "${status_label}"
+  printf -v "${prefix}_TOP_ISSUE" '%s' "${top_issue}"
+  printf -v "${prefix}_SCREENSHOTS_CELL" '%s' "${screenshots_cell}"
+  printf -v "${prefix}_SECTION_BODY" '%s' "${section_body}"
+}
+
+compute_qa_outputs "artifacts/qa/toolBased" "${PLATFORM_LABEL}" TOOL
+compute_qa_outputs "artifacts/qa/naive" "${PLATFORM_LABEL}" NAIVE
+
+set-output status "${TOOL_STATUS}"
+set-output status_label "${TOOL_STATUS_LABEL}"
+set-output top_issue "${TOOL_TOP_ISSUE}"
+set-output screenshots_cell "${TOOL_SCREENSHOTS_CELL}"
+set-output section_body "${TOOL_SECTION_BODY}"
+
+set-output naive_status "${NAIVE_STATUS}"
+set-output naive_status_label "${NAIVE_STATUS_LABEL}"
+set-output naive_top_issue "${NAIVE_TOP_ISSUE}"
+set-output naive_section_body "${NAIVE_SECTION_BODY}"
+
 exit $EXIT_CODE
