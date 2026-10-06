@@ -1,0 +1,20 @@
+{
+  "name": "eas-agent-device-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:ios": "e2e run --target ios",
+    "test:android": "e2e run --target android",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": "^22.22.3 || >=24.8.0"
+  },
+  "devDependencies": {
+    "@e2e-dev/mobile": "^0.10.0",
+    "@types/node": "^24.19.1",
+    "ai": "^7.0.128",
+    "e2e": "^0.18.0",
+    "typescript": "~5.9.2"
+  }
+}
