@@ -88,12 +88,6 @@ SECTION_BODY="### ${PLATFORM_LABEL}
 
 **Status:** ${STATUS_LABEL}
 "
-if [ -f "${REPORT}" ]; then
-  ASSESSMENT="$(jq -r '.run.explore.summary // empty' "${REPORT}")"
-  [ -n "${ASSESSMENT}" ] && SECTION_BODY="${SECTION_BODY}
-${ASSESSMENT}
-"
-fi
 if [ -f "${OUTPUT_DIR}/summary.md" ]; then
   SECTION_BODY="${SECTION_BODY}
 $(cat "${OUTPUT_DIR}/summary.md")"
