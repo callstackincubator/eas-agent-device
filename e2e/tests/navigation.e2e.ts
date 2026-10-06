@@ -10,17 +10,17 @@ test('opens on the home tab', async ({ app, screen }) => {
 test('switches to the explore tab', async ({ app, screen }) => {
   await app.open();
 
-  await screen.getByText('Explore').first().tap();
+  await screen.getByTestId('explore-tab').tap();
 
   await expect(screen.getByText('This app includes example code to help you get started.')).toBeVisible();
 });
 
 test('expands a collapsible section', async ({ app, screen }) => {
   await app.open();
-  await screen.getByText('Explore').first().tap();
+  await screen.getByTestId('explore-tab').tap();
 
   // The collapsible sections sit below the parallax header; scroll them into view.
-  const section = screen.getByText('File-based routing');
+  const section = screen.getByTestId('file-based-routing');
   for (let swipes = 0; swipes < 3 && !(await section.isVisible()); swipes++) {
     await screen.swipe({ direction: 'up' });
   }
