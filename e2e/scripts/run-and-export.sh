@@ -27,6 +27,29 @@ if [ -f "${OUTPUT_DIR}/summary.md" ]; then
 $(cat "${page}")
 </details>"
   done
+  # What the agent did in each turn of its steps, for runs with a failure.
+  if [ "${EXIT_CODE}" -ne 0 ] && [ -f "${OUTPUT_DIR}/report.json" ]; then
+    AGENT_TURNS="$(
+      jq -r '
+        [.. | objects | select(has("turns") and has("label"))]
+        | map(
+            "#### \(.label) (\(.status))\n"
+            + (if .explanation then "> \(.explanation)\n" else "" end)
+            + ([.turns[] | "\(.index). `\(.calls | join("; "))`\n   → \(.outcome | gsub("\n"; " ") | .[0:300])"] | join("\n"))
+          )
+        | join("\n\n")
+      ' "${OUTPUT_DIR}/report.json" 2>/dev/null
+    )"
+    if [ -n "${AGENT_TURNS}" ]; then
+      SUMMARY="${SUMMARY}
+
+<details>
+<summary>Agent turns</summary>
+
+${AGENT_TURNS}
+</details>"
+    fi
+  fi
   # Keep the PR comment under GitHub's size limit.
   SUMMARY="$(printf '%s' "${SUMMARY}" | head -c 30000)"
 else
