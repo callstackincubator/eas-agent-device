@@ -1,5 +1,7 @@
 import { expect, test } from 'e2e';
 
+import { scrollTo } from './scroll.ts';
+
 test('opens on the home tab', async ({ app, screen }) => {
   await app.open();
 
@@ -19,11 +21,9 @@ test('expands a collapsible section', async ({ app, screen }) => {
   await app.open();
   await screen.getByTestId('explore-tab').tap();
 
-  // The collapsible sections sit below the parallax header; scroll them into view.
+  // The collapsible sections sit below the parallax header.
   const section = screen.getByTestId('file-based-routing');
-  for (let swipes = 0; swipes < 3 && !(await section.isVisible()); swipes++) {
-    await screen.swipe({ direction: 'up' });
-  }
+  await scrollTo(screen, section);
   await section.tap();
 
   await expect(screen.getByText(/sets up the tab navigator/)).toBeVisible();

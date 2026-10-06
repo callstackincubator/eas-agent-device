@@ -15,8 +15,20 @@ else
 fi
 
 if [ -f "${OUTPUT_DIR}/summary.md" ]; then
+  SUMMARY="$(cat "${OUTPUT_DIR}/summary.md")"
+  # Each failure page has the steps, the agent's actions, and the screen at failure.
+  for page in "${OUTPUT_DIR}"/failures/*.md; do
+    [ -f "${page}" ] || continue
+    SUMMARY="${SUMMARY}
+
+<details>
+<summary>Failure details: $(basename "${page}" .md)</summary>
+
+$(cat "${page}")
+</details>"
+  done
   # Keep the PR comment under GitHub's size limit.
-  SUMMARY="$(head -c 20000 "${OUTPUT_DIR}/summary.md")"
+  SUMMARY="$(printf '%s' "${SUMMARY}" | head -c 30000)"
 else
   SUMMARY="No e2e summary was produced. See the workflow logs."
 fi
