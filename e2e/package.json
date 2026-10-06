@@ -16,5 +16,8 @@
     "ai": "^7.0.128",
     "e2e": "^0.18.0",
     "typescript": "~5.9.2"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.8.1"
   }
 }

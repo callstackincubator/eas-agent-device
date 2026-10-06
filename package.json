@@ -8,16 +8,13 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint",
-    "agent-qa": "node ./scripts/agent-qa/index.ts",
-    "agent-qa:check": "node ./scripts/agent-qa/check.mjs"
+    "lint": "expo lint"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
     "@react-navigation/bottom-tabs": "^7.4.0",
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
-    "@vercel/blob": "^2.3.1",
     "expo": "^55.0.8",
     "expo-constants": "~55.0.9",
     "expo-font": "~55.0.4",
@@ -42,8 +39,6 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.10",
-    "agent-device": "0.16.12",
-    "ai": "^6.0.116",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~55.0.0",
     "typescript": "~5.9.2"

@@ -82,96 +82,90 @@ jobs:
       message: "PR #${{ github.event.pull_request.number }} iOS agent QA build"
 
   qa_android:
-    name: Android agent-device QA
+    name: Android smoke QA (e2e explore)
     after: [android_repack, android_build]
     if: ${{ after.android_repack.status == 'success' || after.android_build.status == 'success' }}
     environment: preview
     runs_on: linux-medium-nested-virtualization
     outputs:
-      status: ${{ steps.run_agent_qa.outputs.status }}
-      status_label: ${{ steps.run_agent_qa.outputs.status_label }}
-      top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
-      screenshots_cell: ${{ steps.run_agent_qa.outputs.screenshots_cell }}
-      section_body: ${{ steps.run_agent_qa.outputs.section_body }}
+      status: ${{ steps.run_explore.outputs.status }}
+      status_label: ${{ steps.run_explore.outputs.status_label }}
+      top_issue: ${{ steps.run_explore.outputs.top_issue }}
+      screenshots_cell: ${{ steps.run_explore.outputs.screenshots_cell }}
+      section_body: ${{ steps.run_explore.outputs.section_body }}
     env:
       BUILD_ID: ${{ after.android_repack.outputs.build_id || after.android_build.outputs.build_id }}
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
-      WORKFLOW_URL: ${{ workflow.url }}
-      QA_MODEL: openai/gpt-5.4-mini
-      QA_PLATFORM: android
-      APPLICATION_ID: dev.expo.easagentdevice
-      AGENT_DEVICE_ANDROID_DEVICE: ci-android
+      E2E_BLOB_PREFIX: pr-${{ github.event.pull_request.number }}/android
+      CI: "1"
+      E2E_DEVICE: emulator-5554
     steps:
       - uses: eas/checkout
-      - uses: eas/install_node_modules
-      - id: install_eve_agent
+      - id: install_e2e
         run: |
-          npm ci --prefix ./scripts/agent-qa/eve
-      - id: install_agent_device
-        run: |
-          npm install -g agent-device@0.16.12
+          npm ci --prefix ./e2e
       - uses: eas/download_build
         id: download_build
         with:
           build_id: ${{ env.BUILD_ID }}
           extensions: [apk]
-      - id: provision_android_emulator
+      - uses: eas/start_android_emulator
+        with:
+          system_image_package: system-images;android-35;google_apis;x86_64
+      - id: install_app
         run: |
-          bash ./scripts/agent-qa/provision-android-emulator.sh
-      - id: run_agent_qa
-        env:
-          AGENT_DEVICE_SESSION: qa-android
-          AGENT_DEVICE_PLATFORM: android
-          AGENT_DEVICE_SESSION_LOCK: strip
+          adb install -r "${{ steps.download_build.outputs.artifact_path }}"
+      - id: run_explore
+        working_directory: ./e2e
         run: |
-          bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
+          bash ./scripts/explore-and-export.sh android
+      - uses: eas/upload_artifact
+        if: ${{ always() }}
+        with:
+          type: other
+          name: e2e-explore-android
+          path: e2e/.e2e-explore
 
   qa_ios:
-    name: iOS agent-device QA
+    name: iOS smoke QA (e2e explore)
     after: [ios_repack, ios_build]
     if: ${{ after.ios_repack.status == 'success' || after.ios_build.status == 'success' }}
     environment: preview
     runs_on: macos-medium
     outputs:
-      status: ${{ steps.run_agent_qa.outputs.status }}
-      status_label: ${{ steps.run_agent_qa.outputs.status_label }}
-      top_issue: ${{ steps.run_agent_qa.outputs.top_issue }}
-      screenshots_cell: ${{ steps.run_agent_qa.outputs.screenshots_cell }}
-      section_body: ${{ steps.run_agent_qa.outputs.section_body }}
+      status: ${{ steps.run_explore.outputs.status }}
+      status_label: ${{ steps.run_explore.outputs.status_label }}
+      top_issue: ${{ steps.run_explore.outputs.top_issue }}
+      screenshots_cell: ${{ steps.run_explore.outputs.screenshots_cell }}
+      section_body: ${{ steps.run_explore.outputs.section_body }}
     env:
       BUILD_ID: ${{ after.ios_repack.outputs.build_id || after.ios_build.outputs.build_id }}
       PR_JSON: ${{ toJSON(github.event.pull_request) }}
-      WORKFLOW_URL: ${{ workflow.url }}
-      QA_MODEL: openai/gpt-5.4-mini
-      QA_PLATFORM: ios
-      APPLICATION_ID: dev.expo.easagentdevice
-      AGENT_DEVICE_IOS_DEVICE: iPhone 17
-      AGENT_DEVICE_DAEMON_TIMEOUT_MS: "180000"
-      AGENT_DEVICE_IOS_BOOT_TIMEOUT_MS: "180000"
+      E2E_BLOB_PREFIX: pr-${{ github.event.pull_request.number }}/ios
+      CI: "1"
     steps:
       - uses: eas/checkout
-      - uses: eas/install_node_modules
-      - id: install_eve_agent
+      - id: install_e2e
         run: |
-          npm ci --prefix ./scripts/agent-qa/eve
-      - id: install_agent_device
-        run: |
-          npm install -g agent-device@0.16.12
+          npm ci --prefix ./e2e
       - uses: eas/download_build
         id: download_build
         with:
           build_id: ${{ env.BUILD_ID }}
           extensions: [app]
-      - id: provision_ios_simulator
+      - id: boot_simulator
         run: |
-          bash ./scripts/agent-qa/provision-ios-simulator.sh
-      - id: run_agent_qa
-        env:
-          AGENT_DEVICE_SESSION: qa-ios
-          AGENT_DEVICE_PLATFORM: ios
-          AGENT_DEVICE_SESSION_LOCK: strip
+          bash ./e2e/scripts/boot-ios-simulator.sh "${{ steps.download_build.outputs.artifact_path }}"
+      - id: run_explore
+        working_directory: ./e2e
         run: |
-          bash ./scripts/agent-qa/run-and-export.sh "${{ steps.download_build.outputs.artifact_path }}"
+          bash ./scripts/explore-and-export.sh ios
+      - uses: eas/upload_artifact
+        if: ${{ always() }}
+        with:
+          type: other
+          name: e2e-explore-ios
+          path: e2e/.e2e-explore
 
   e2e_android:
     name: Android e2e tests
@@ -185,6 +179,7 @@ jobs:
       summary: ${{ steps.run_e2e.outputs.summary }}
     env:
       BUILD_ID: ${{ after.android_repack.outputs.build_id || after.android_build.outputs.build_id }}
+      E2E_BLOB_PREFIX: pr-${{ github.event.pull_request.number }}/android-tests
       CI: "1"
       E2E_DEVICE: emulator-5554
     steps:
@@ -226,6 +221,7 @@ jobs:
       summary: ${{ steps.run_e2e.outputs.summary }}
     env:
       BUILD_ID: ${{ after.ios_repack.outputs.build_id || after.ios_build.outputs.build_id }}
+      E2E_BLOB_PREFIX: pr-${{ github.event.pull_request.number }}/ios-tests
       CI: "1"
     steps:
       - uses: eas/checkout
@@ -258,9 +254,9 @@ jobs:
     type: github-comment
     params:
       payload: |
-        ## Agent QA
+        ## Smoke QA (e2e explore)
 
-        | Platform | Status | Issues |
+        | Platform | Status | Top finding |
         | --- | --- | --- |
         | Android | ${{ after.qa_android.outputs.status_label || '⛔ blocked' }} | ${{ after.qa_android.outputs.top_issue || 'No Android QA report was produced.' }} |
         | iOS | ${{ after.qa_ios.outputs.status_label || '⛔ blocked' }} | ${{ after.qa_ios.outputs.top_issue || 'No iOS QA report was produced.' }} |
