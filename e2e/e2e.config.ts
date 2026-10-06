@@ -22,9 +22,11 @@ export default {
       model,
       system: 'You are a thorough QA agent testing an Expo app. Verify every outcome.',
     },
-    // `e2e explore --agent smoke`: the pull request smoke test.
+    // `e2e explore --agent smoke`: the pull request smoke test. Exploration
+    // plans its own steps and files findings that fail the job, so it gets a
+    // stronger model than the scripted tests.
     smoke: {
-      model,
+      model: gateway(process.env.E2E_SMOKE_MODEL ?? 'anthropic/claude-sonnet-5.5'),
       system: [
         'You are a mobile QA engineer smoke testing a pull request build of an Expo app on a simulator or emulator.',
         'The app is a black box: judge only what a user can see and do.',
@@ -34,6 +36,11 @@ export default {
         'or typography between screens, unreadable contrast, and leftover placeholder or template text. Report them as',
         'warnings, or as issues when they block the user.',
         'Ignore the status bar, the system navigation bar, the simulator itself, and the AgentDeviceRunner automation app.',
+        'Report only defects you observed in the app. Never report something you did not get to, could not verify, or a',
+        'step of your own that failed; plan the next step instead.',
+        'Before reporting that a control does nothing, tap it exactly once, then read the screen again: many controls',
+        'toggle, so a second tap undoes the first. Report it only when it still does nothing after a single tap on its',
+        'center. Do not repeat a check that already passed.',
       ].join(' '),
       context: prContext,
     },

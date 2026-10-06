@@ -32,7 +32,8 @@ This repo is a minimal Expo + CNG example for running AI-assisted Android and iO
 
 Optional environment variables for the QA jobs:
 
-- `E2E_MODEL`: Override the default model (`openai/gpt-5.4-mini`)
+- `E2E_MODEL`: Override the test suite's model (`openai/gpt-5.4-mini`)
+- `E2E_SMOKE_MODEL`: Override the smoke test's model (`anthropic/claude-sonnet-5.5`)
 - `E2E_EXPLORE_MAX_STEPS`: Exploration steps, 1 through 12 (default 8)
 - `E2E_EXPLORE_TIMEOUT_MS`: Exploration wall clock, 180000 through 900000 (default 600000)
 - `E2E_IOS_RUNTIME` / `E2E_IOS_MAJOR`: Pin the iOS simulator runtime (default: the newest iOS 26)

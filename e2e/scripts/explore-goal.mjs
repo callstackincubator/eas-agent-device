@@ -53,7 +53,7 @@ process.stdout.write(`${truncate(goal.join('\n'), MAX_GOAL_CHARS)}\n`);
 if (contextFile) {
   const context = ['The pull request under test.'];
   if (pr.title) context.push('', `Title: ${pr.title}`);
-  const body = (pr.body ?? '').replace(/<!--[\s\S]*?-->/g, '').trim();
+  const body = (pr.body ?? '').trim();
   if (body) context.push('', 'Description:', truncate(body, MAX_BODY_CHARS));
   if (files.length > 0) {
     context.push('', 'Changed app files:');
