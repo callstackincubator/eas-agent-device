@@ -24,8 +24,9 @@ fi
 if [ -f "${OUTPUT_DIR}/report.json" ]; then
   COUNTS="$(
     jq -r '
-      [.. | objects | select(has("status") and has("title")) | .status]
-      | group_by(.) | map("\(length) \(.[0])") | join(", ")
+      .run.summary
+      | [("passed", "failed", "flaky", "skipped", "interrupted") as $key | select(.[$key] > 0) | "\(.[$key]) \($key)"]
+      | join(", ")
     ' "${OUTPUT_DIR}/report.json" 2>/dev/null
   )"
 fi

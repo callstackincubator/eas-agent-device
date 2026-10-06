@@ -19,7 +19,12 @@ test('expands a collapsible section', async ({ app, screen }) => {
   await app.open();
   await screen.getByText('Explore').first().tap();
 
-  await screen.getByText('File-based routing').tap();
+  // The collapsible sections sit below the parallax header; scroll them into view.
+  const section = screen.getByText('File-based routing');
+  for (let swipes = 0; swipes < 3 && !(await section.isVisible()); swipes++) {
+    await screen.swipe({ direction: 'up' });
+  }
+  await section.tap();
 
   await expect(screen.getByText(/sets up the tab navigator/)).toBeVisible();
 });
