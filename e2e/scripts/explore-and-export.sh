@@ -29,6 +29,21 @@ npx e2e explore "${GOAL}" \
   --reporter list,markdown
 EXIT_CODE=$?
 
+# The screen the exploration ended on, so the comment always shows at least one
+# screenshot; findings only carry one when the agent reports something.
+FINAL_SCREENSHOT="${OUTPUT_DIR}/final-screen.png"
+if [ "${TARGET}" = "ios" ]; then
+  xcrun simctl io "${E2E_DEVICE:-booted}" screenshot "${FINAL_SCREENSHOT}"
+else
+  adb ${E2E_DEVICE:+-s "${E2E_DEVICE}"} exec-out screencap -p > "${FINAL_SCREENSHOT}"
+fi
+FINAL_SCREENSHOT_URL=""
+if [ -s "${FINAL_SCREENSHOT}" ]; then
+  FINAL_SCREENSHOT_URL="$(
+    node ./scripts/upload-screenshot.mjs "${FINAL_SCREENSHOT}" "e2e/${E2E_BLOB_PREFIX:-local}/final-screen.png"
+  )"
+fi
+
 if [ -f "${REPORT}" ]; then
   # An issue fails the run, a warning does not; blocked and error runs have no verdict.
   STATUS="$(
@@ -61,10 +76,11 @@ if [ -f "${REPORT}" ]; then
     ' "${REPORT}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//'
   )"
 
-  # Screenshots the artifact store uploaded (refs are public URLs): finding evidence
-  # first, most severe first and labelled with the finding, then the rest, up to four.
+  # Screenshots the artifact store uploaded (refs are public URLs): finding evidence,
+  # most severe first and labelled with the finding, then the rest, up to three,
+  # then the final screen.
   SCREENSHOTS_CELL="$(
-    jq -r '
+    jq -r --arg final "${FINAL_SCREENSHOT_URL}" '
       [.. | objects | select(.kind == "screenshot" and ((.ref // "") | startswith("http")))] as $shots
       | [(.run.explore.findings // []) | sort_by((if .kind == "issue" then 0 else 1 end), -.severity)[] | select(.artifactId) | {id: .artifactId, label: .title}] as $evidence
       | ($evidence | map(.id)) as $evidenceIds
@@ -73,7 +89,8 @@ if [ -f "${REPORT}" ]; then
           + [$shots[] | select(.id as $id | $evidenceIds | index($id) | not) | {url: .ref, label: (.path // .id | split("/") | last)}]
         )
       | reduce .[] as $shot ([]; if any(.[]; .url == $shot.url) then . else . + [$shot] end)
-      | .[0:4]
+      | .[0:3]
+      | . + (if $final == "" then [] else [{url: $final, label: "Final screen"}] end)
       | if length == 0 then "N/A"
         else map("**\(.label)**<br><a href=\"\(.url)\"><img src=\"\(.url)\" alt=\"\(.label)\" height=\"500\" /></a>") | join("<br><br>")
         end
@@ -81,7 +98,11 @@ if [ -f "${REPORT}" ]; then
   )"
 else
   TOP_ISSUE="No exploration report was produced. See the workflow logs."
-  SCREENSHOTS_CELL="N/A"
+  if [ -n "${FINAL_SCREENSHOT_URL}" ]; then
+    SCREENSHOTS_CELL="**Final screen**<br><a href=\"${FINAL_SCREENSHOT_URL}\"><img src=\"${FINAL_SCREENSHOT_URL}\" alt=\"Final screen\" height=\"500\" /></a>"
+  else
+    SCREENSHOTS_CELL="N/A"
+  fi
 fi
 
 SECTION_BODY="### ${PLATFORM_LABEL}
