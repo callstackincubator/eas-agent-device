@@ -11,7 +11,7 @@ import { blobStore } from './blob-store.ts';
 const app = { bundleId: 'dev.expo.easagentdevice' };
 // The Vercel AI Gateway reads AI_GATEWAY_API_KEY. Only tests that use `agent`
 // and `e2e explore` need it; tests/navigation.e2e.ts runs without one.
-const model = gateway(process.env.E2E_MODEL ?? 'openai/gpt-5.4-mini');
+const model = gateway(process.env.E2E_MODEL ?? 'openai/gpt-6-luna');
 // The pull request's description and diff, from scripts/explore-goal.mjs.
 const prContext = process.env.E2E_PR_CONTEXT_FILE ? readFileSync(process.env.E2E_PR_CONTEXT_FILE, 'utf8') : undefined;
 
