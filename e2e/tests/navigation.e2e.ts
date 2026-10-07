@@ -1,0 +1,30 @@
+import { expect, test } from 'e2e';
+
+import { scrollTo } from './scroll.ts';
+
+test('opens on the home tab', async ({ app, screen }) => {
+  await app.open();
+
+  await expect(screen.getByText('Welcome!')).toBeVisible();
+  await expect(screen.getByText('Step 1: Try it')).toBeVisible();
+});
+
+test('switches to the explore tab', async ({ app, screen }) => {
+  await app.open();
+
+  await screen.getByTestId('explore-tab').tap();
+
+  await expect(screen.getByText('This app includes example code to help you get started.')).toBeVisible();
+});
+
+test('expands a collapsible section', async ({ app, screen }) => {
+  await app.open();
+  await screen.getByTestId('explore-tab').tap();
+
+  // The collapsible sections sit below the parallax header.
+  const section = screen.getByTestId('file-based-routing');
+  await scrollTo(screen, section);
+  await section.tap();
+
+  await expect(screen.getByText(/sets up the tab navigator/)).toBeVisible();
+});
